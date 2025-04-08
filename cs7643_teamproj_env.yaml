@@ -6,7 +6,8 @@ dependencies:
   - numpy
   - pyyaml
   - matplotlib
-  - easyocr
   - pip
   - pip:
       - pytesseract
+      - ninja
+      - easyocr
