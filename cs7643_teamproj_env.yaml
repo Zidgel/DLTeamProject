@@ -2,7 +2,11 @@ name: cs7643_teamproj
 channels:
   - defaults
 dependencies:
-  - python==3.12
+  - python==3.11
   - numpy
   - pyyaml
   - matplotlib
+  - easyocr
+  - pip
+  - pip:
+      - pytesseract
