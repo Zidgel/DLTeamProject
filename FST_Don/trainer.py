@@ -5,13 +5,22 @@ import torch.optim as optim
 
 
 class trainer:
-    def __init__(self, style_image: torch.Tensor, epochs, content_loader, device, lr):
+    def __init__(
+        self,
+        style_image: torch.Tensor,
+        epochs,
+        content_loader,
+        device,
+        lr,
+        style_beta,
+    ):
         self.model = fst_model(style_image.to(device), device).to(device)
         self.epochs = epochs
         self.content_loader = content_loader
         self.device = device
         self.style_image = style_image.to(device)
         self.lr = lr
+        self.style_beta = style_beta
 
     def train(self):
         optimizer = optim.Adam(self.model.net.parameters(), lr=self.lr)
@@ -40,7 +49,7 @@ class trainer:
                     style_gram = gram_matrix(self.model.style_features[layer])
                     style_loss += mse_loss(out_gram, style_gram)
 
-                total_loss = content_loss + 1e5 * style_loss
+                total_loss = content_loss + self.style_beta * style_loss
 
                 # --- Backward ---
                 optimizer.zero_grad()
@@ -52,7 +61,7 @@ class trainer:
                     print(
                         f"Epoch [{epoch+1}], Batch [{i+1}], "
                         f"Content: {content_loss.item():.4f}, "
-                        f"Style: {style_loss.item():.4f}, "
+                        f"Style: {self.style_beta * style_loss.item():.4f}, "
                         f"Total: {total_loss.item():.4f}"
                     )
 
