@@ -37,7 +37,6 @@ class trainer:
 
                 y_hat_features = self.model.get_features(y_hat)
                 y_content_features = self.model.get_features(y_content)
-
                 content_loss = mse_loss.forward(
                     y_hat_features["relu3_3"], y_content_features["relu3_3"]
                 )
