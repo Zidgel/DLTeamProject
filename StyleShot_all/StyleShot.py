@@ -1,7 +1,14 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+"""
+NOTES:
 
+STYLESHOT uses VITs to extract style tokens
+Uses a CNN with residual blocks to extract content features. 
+Content extraction uses a HED (Holistically-Nested Edge Detection) network to extract content features. https://arxiv.org/abs/1504.06375
+The fusion of the Content extraction could be an interesting avenue to go down for a paragraph. https://arxiv.org/pdf/1612.03144
+"""
 # Residual Block used across encoders and decoder
 class ResidualBlock(nn.Module):
     def __init__(self, in_channels):
@@ -102,12 +109,56 @@ class StyleEncoder(nn.Module):
         out = self.transformEncoder(tokens)
 
         return out
-    
-class ContentExtraction(nn.Module):
+
+class StyleInjection(nn.Module):
     def __init__(self):
-        super(ContentExtraction, self).__init__()
+        super(StyleInjection, self).__init__()
         return None
-    
+
+class ContentExtraction(nn.Module):
+    def __init__(self, in_channels, layers=3, fuse = True):
+        super(ContentExtraction, self).__init__()
+        
+        self.layers = layers
+        self.block = nn.ModuleList()
+        self.proj = nn.ModuleList()
+        self.fuse = fuse
+        
+        self.out_channels = in_channels * 2**layers
+        for _ in range(layers):
+            
+            #Down Samples each the content image
+            self.block.append(nn.Sequential(nn.Conv2d(in_channels, in_channels*2, kernel_size=3, padding=1), nn.ReLU(True)))
+
+            #"Residual layer", the projection layer takes each of the outputs of the downsamples and projects it to the final channels
+            self.proj.append(nn.Conv2d(in_channels*2, self.out_channels, kernel_size=3, padding=1))
+
+            in_channels = in_channels * 2
+
+
+    def forward(self, x):
+        out = []
+
+        for i in range(self.layers):
+            #Get the downsample of the layer and add the projection to the output
+            x = self.block[i](x)
+            
+            out.append(self.proj[i](x))
+        
+        #Choice of either concatenating the outputs and applying a final projection or summing them up.
+        #This could be a really interesting aspect to talk about
+        if self.fuse:
+            out = torch.cat(out, dim=1)
+            out = nn.Conv2d(out.size(1), self.out_channels, kernel_size=1)(out)
+        else:
+            out = sum(out[-2:])
+        return out
+
+class ContentInjection(nn.Module):
+    def __init__(self):
+        super(ContentInjection, self).__init__()
+        return None
+
 class StyleTransfer(nn.Module):
     def __init__(self):
         super(StyleTransfer, self).__init__()
@@ -115,7 +166,7 @@ class StyleTransfer(nn.Module):
     
 if __name__ == "__main__":
     # Example usage
-    style_encoder = StyleEncoder(in_channels=3, out_channels=64)
+    style_encoder = ContentExtraction(in_channels=3, layers=2)
     x = torch.randn(1, 3, 256, 256)  # Example input
     output = style_encoder(x)
     print(output.size())
