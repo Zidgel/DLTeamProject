@@ -1,0 +1,121 @@
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+# Residual Block used across encoders and decoder
+class ResidualBlock(nn.Module):
+    def __init__(self, in_channels):
+        super(ResidualBlock, self).__init__()
+        self.block = nn.Sequential(
+            nn.Conv2d(in_channels, in_channels, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(in_channels, in_channels, kernel_size=3, padding=1)
+        )
+
+    def forward(self, x):
+        return x + self.block(x)
+
+class StyleEncoder(nn.Module):
+    
+    def __init__(self, in_channels, out_channels, style_token_dim=256, num_style_tokens=4, scaling= 64):
+        super(StyleEncoder, self).__init__()
+        
+        #Encoder D extracts large styling features 
+        self.encoder_d =  nn.Sequential(ResidualBlock(scaling), ResidualBlock(scaling))
+        
+        #Encoder S extracts medium sized styling features
+        self.encoder_s = nn.Sequential(ResidualBlock(scaling), ResidualBlock(scaling), ResidualBlock(scaling))
+
+        #Encoder M extracts fine grain styling features
+        self.encoder_m = nn.Sequential(ResidualBlock(scaling), ResidualBlock(scaling),ResidualBlock(scaling), ResidualBlock(scaling))
+
+        #Get patches
+        self.embed_patches = nn.Conv2d(in_channels, out_channels, kernel_size=1, stride=1, padding=0)
+
+        #Learnable style tokens from feature patches
+        self.style_tokens = nn.Parameter(torch.randn(1, num_style_tokens, style_token_dim))
+
+        #Self relational transformer encoder to develop understanding between patches and styling features
+        self.encoder_layer = nn.TransformerEncoderLayer(
+            d_model=style_token_dim,
+            nhead=8,
+            dim_feedforward=512,
+            dropout=0.1,
+            activation='relu',
+            batch_first=True
+        )
+        self.transformEncoder = nn.TransformerEncoder(self.encoder_layer, num_layers=4)
+
+        #Projection layer to project the output of the transformer encoder to the desired style token dimension
+        self.token_projection = nn.Linear(scaling, style_token_dim)
+
+    def get_patches(self, x, patch_size):
+        # x: (B, C, H, W)
+        B, C, H, W = x.size()
+        num_patches = H//patch_size * W//patch_size
+        
+        # Unfold the image into patches 
+        patches = x.unfold(2, size=patch_size, step=patch_size).unfold(3, size=patch_size, step=patch_size)
+        
+        #combine both unfolded dimensions into one channel
+        patches = patches.contiguous().view(B, C, num_patches, patch_size, patch_size)
+        
+        #reorder the dimensions to (B*num_patches, C, patch_size, patch_size)
+        patches = patches.permute(0, 2, 1, 3, 4)
+
+        return patches
+    
+    def forward(self, x):
+
+        #Get the size of the image
+        img_len = x.size(3)
+        
+        #Array to hold all extracted features
+        features = []
+
+        #Get embedding of the image
+        embedding = self.embed_patches(x)
+        
+        #Go through each encoder type and iterate over each aspect ratio
+        for patch_size, encoding in zip([img_len//4, img_len//8, img_len//16], [self.encoder_d, self.encoder_s, self.encoder_m]):
+            
+            #resize embedding to patch size
+            patches = self.get_patches(embedding, patch_size)
+            B, N, C, H, W = patches.shape
+            patches = patches.contiguous().view(B*N, C, patch_size, patch_size)
+            #Extract features at the associated aspect (Is this mean correct?)
+            out = encoding(patches).mean(dim=[2, 3])
+
+            out = out.view(B, N, -1)
+            #append features
+            features.append(out)
+
+        features = torch.cat(features, dim=1)
+        f_proj = self.token_projection(features)
+
+        #Get the style tokens
+        style_tokens = self.style_tokens.expand(x.size(0), -1, -1)
+
+        tokens = torch.cat([style_tokens, f_proj], dim=1)
+
+        #VIT pass through
+        out = self.transformEncoder(tokens)
+
+        return out
+    
+class ContentExtraction(nn.Module):
+    def __init__(self):
+        super(ContentExtraction, self).__init__()
+        return None
+    
+class StyleTransfer(nn.Module):
+    def __init__(self):
+        super(StyleTransfer, self).__init__()
+        return None
+    
+if __name__ == "__main__":
+    # Example usage
+    style_encoder = StyleEncoder(in_channels=3, out_channels=64)
+    x = torch.randn(1, 3, 256, 256)  # Example input
+    output = style_encoder(x)
+    print(output.size())
