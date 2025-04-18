@@ -8,6 +8,9 @@ STYLESHOT uses VITs to extract style tokens
 Uses a CNN with residual blocks to extract content features. 
 Content extraction uses a HED (Holistically-Nested Edge Detection) network to extract content features. https://arxiv.org/abs/1504.06375
 The fusion of the Content extraction could be an interesting avenue to go down for a paragraph. https://arxiv.org/pdf/1612.03144
+
+
+Possiblity to use AdaIN?
 """
 # Residual Block used across encoders and decoder
 class ResidualBlock(nn.Module):
@@ -28,13 +31,13 @@ class StyleEncoder(nn.Module):
         super(StyleEncoder, self).__init__()
         
         #Encoder D extracts large styling features 
-        self.encoder_d =  nn.Sequential(ResidualBlock(scaling), ResidualBlock(scaling))
+        self.encoder_d =  nn.Sequential(ResidualBlock(out_channels), ResidualBlock(out_channels))
         
         #Encoder S extracts medium sized styling features
-        self.encoder_s = nn.Sequential(ResidualBlock(scaling), ResidualBlock(scaling), ResidualBlock(scaling))
+        self.encoder_s = nn.Sequential(ResidualBlock(out_channels), ResidualBlock(out_channels), ResidualBlock(out_channels))
 
         #Encoder M extracts fine grain styling features
-        self.encoder_m = nn.Sequential(ResidualBlock(scaling), ResidualBlock(scaling),ResidualBlock(scaling), ResidualBlock(scaling))
+        self.encoder_m = nn.Sequential(ResidualBlock(out_channels), ResidualBlock(out_channels),ResidualBlock(out_channels), ResidualBlock(out_channels))
 
         #Get patches
         self.embed_patches = nn.Conv2d(in_channels, out_channels, kernel_size=1, stride=1, padding=0)
@@ -54,7 +57,7 @@ class StyleEncoder(nn.Module):
         self.transformEncoder = nn.TransformerEncoder(self.encoder_layer, num_layers=4)
 
         #Projection layer to project the output of the transformer encoder to the desired style token dimension
-        self.token_projection = nn.Linear(scaling, style_token_dim)
+        self.token_projection = nn.Linear(out_channels, style_token_dim)
 
         #STYLE INJECTION TRANSFORMER
         """"
@@ -127,10 +130,11 @@ class StyleEncoder(nn.Module):
         #VIT pass through
         out = self.transformEncoder(tokens)
 
-        return out
+        return out[:, :self.style_tokens.shape[1], :]
+
 
 class ContentExtraction(nn.Module):
-    def __init__(self, in_channels, layers=3, fuse = True, downsample_rate=2):
+    def __init__(self, in_channels, layers=3, fuse = True, downsample_rate=2, token_dim=256):
         super(ContentExtraction, self).__init__()
         
         #Content extraction uses a HED (Holistically-Nested Edge Detection) network to extract content features. https://arxiv.org/abs/1504.06375
@@ -143,13 +147,13 @@ class ContentExtraction(nn.Module):
         #Dynamically set the number of channels based on the number of layers
         self.out_channels = in_channels * (downsample_rate**layers)
         self.fusion_projection = nn.Conv2d(self.out_channels * layers, self.out_channels, kernel_size=1)
-
-
+            
+        self.content_proj = nn.Linear(self.out_channels, token_dim)
 
         for _ in range(layers):
             
             #Down Samples each the content image
-            self.block.append(nn.Sequential(nn.Conv2d(in_channels, in_channels*downsample_rate, kernel_size=3, padding=1), nn.ReLU(True)))
+            self.block.append(nn.Sequential(nn.Conv2d(in_channels, in_channels*downsample_rate, stride=2, kernel_size=3, padding=1), nn.ReLU(True)))
 
             #"Residual layer", the projection layer takes each of the outputs of the downsamples and projects it to the final channels
             self.proj.append(nn.Conv2d(in_channels*downsample_rate, self.out_channels, kernel_size=3, padding=1))
@@ -171,23 +175,129 @@ class ContentExtraction(nn.Module):
         #Choice of either concatenating the outputs and applying a final projection or summing them up.
         #This could be a really interesting aspect to talk about
         if self.fuse:
-            out = torch.cat(out, dim=1)
+            target_size = out[0].shape[-2:]
+            resized_out = [F.interpolate(feat, size=target_size, mode='bilinear', align_corners=False) for feat in out]
+            out = torch.cat(resized_out, dim=1)
             out = self.fusion_projection(out)
+
         else:
-            out = sum(out[-2:])
-        
-        return out
+            out = sum(out)
+
+        B, C, H, W = out.shape
+        tokens = out.view(B, C, -1).permute(0, 2, 1)
+        tokens = self.content_proj(tokens)
+        return tokens
+
+
+
+
+class CrossAttentionBlock(nn.Module):
+    def __init__(self, dim, context_dim):
+        super().__init__()
+        self.query_proj = nn.Linear(dim, dim)
+        self.key_proj = nn.Linear(context_dim, dim)
+        self.value_proj = nn.Linear(context_dim, dim)
+        self.out_proj = nn.Linear(dim, dim)
+
+    def forward(self, x, context):
+        """
+        x: [B, N, D]        - current features
+        context: [B, M, D_c] - context (e.g., f_s or f_c)
+        """
+        Q = self.query_proj(x)
+        K = self.key_proj(context)
+        V = self.value_proj(context)
+
+        attn_weights = torch.softmax(Q @ K.transpose(-2, -1) / (Q.shape[-1] ** 0.5), dim=-1)
+        attended = attn_weights @ V
+        out = self.out_proj(attended)
+
+        return x + out  # residual addition
+
+
+#Not totally sure how all this works. Need to do more analysis of UNET and Paper. Will add comments later
+class UNetBlock(nn.Module):
+    def __init__(self, in_ch, out_ch, style_dim=None, content_dim=None):
+        super().__init__()
+        self.conv = nn.Sequential(
+            nn.Conv2d(in_ch, out_ch, 3, padding=1),
+            nn.ReLU(True),
+            nn.Conv2d(out_ch, out_ch, 3, padding=1),
+            nn.ReLU(True)
+        )
+        self.norm = nn.GroupNorm(8, out_ch)
+
+        # If in_ch ≠ out_ch we need a 1 × 1 conv to match shapes
+        self.res_proj = nn.Conv2d(in_ch, out_ch, 1) if in_ch != out_ch else nn.Identity()
+
+        self.style_attn   = CrossAttentionBlock(out_ch, style_dim)   if style_dim   else None
+        self.content_attn = CrossAttentionBlock(out_ch, content_dim) if content_dim else None
+
+    def forward(self, x, f_s=None, f_c=None):
+        residual = self.res_proj(x)          # ★ channel‑align the skip tensor
+        x = self.conv(x)
+
+        B, C, H, W = x.shape
+        x_flat = x.view(B, C, -1).transpose(1, 2)  # [B, HW, C]
+
+        if self.style_attn:
+            x_flat = self.style_attn(x_flat, f_s)
+        if self.content_attn:
+            x_flat = self.content_attn(x_flat, f_c)
+
+        x = x_flat.transpose(1, 2).view(B, C, H, W)
+        return self.norm(x + residual)       # shapes now match
 
 class StyleTransfer(nn.Module):
-    def __init__(self):
-        super(StyleTransfer, self).__init__()
+    def __init__(self, base_channels=64, style_dim=256, content_dim=256, num_blocks=4):
+        super().__init__()
+
+        self.in_conv = nn.Conv2d(3, base_channels, kernel_size=7, padding=3)
+        self.down_blocks = nn.ModuleList()
+        self.up_blocks = nn.ModuleList()
+
+        # Downsampling
+        ch = base_channels
+        for _ in range(num_blocks):
+            self.down_blocks.append(UNetBlock(ch, ch * 2, style_dim, content_dim))
+            ch *= 2
+
+        self.middle = UNetBlock(ch, ch, style_dim, content_dim)
+
+        # Upsampling
+        for _ in range(num_blocks):
+            self.up_blocks.append(UNetBlock(ch, ch // 2, style_dim, content_dim))
+            ch = ch // 2
+
+        self.out_conv = nn.Sequential(
+            nn.Conv2d(ch, 3, kernel_size=7, padding=3),
+            nn.Tanh()
+        )
+
+    def forward(self, noise, f_s, f_c):
+        x = self.in_conv(noise)
+        skips = []
+
+        for block in self.down_blocks:
+            x = block(x, f_s, f_c)
+            skips.append(x)
+            x = F.avg_pool2d(x, 2)
+
+        x = self.middle(x, f_s, f_c)
+
+        for block in self.up_blocks:
+            x = F.interpolate(x, scale_factor=2, mode='nearest')
+            skip = skips.pop()
+            x = x + skip
+            x = block(x, f_s, f_c)
+
+        return self.out_conv(x)
+
         
-        # nn.
-        return None
     
 if __name__ == "__main__":
     # Example usage
-    style_encoder = ContentExtraction(in_channels=3, layers=2)
+    style_encoder = ContentExtraction(in_channels=3, layers=2, fuse=True)
     x = torch.randn(1, 3, 256, 256)  # Example input
     output = style_encoder(x)
     print(output.size())
