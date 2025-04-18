@@ -1,3 +1,7 @@
 __pycache__/
 ~*
-*.csv
+*.csvStyleData/
+StyleData/
+ContentData/
+StyleShot_all/checkpoints/
+StyleShot_all/debug/
