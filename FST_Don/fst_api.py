@@ -61,7 +61,7 @@ class fst_api:
 
     def _init_dataloader(self, path: str):
         # Load dataset using ImageFolder
-        dataset = datasets.ImageFolder(root=path, transform=self.style_transformations)
+        dataset = datasets.ImageFolder(root=path, transform=self.style_transformation)
 
         # Create DataLoader
         return DataLoader(dataset, batch_size=16, shuffle=True, num_workers=4)
