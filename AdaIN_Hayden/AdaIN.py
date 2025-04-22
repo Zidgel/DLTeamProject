@@ -104,7 +104,7 @@ class Encoder(nn.Module):
 
 class AdaIN(nn.Module):
     """
-    interp. the AdaIN component of an STN
+    interp. the (no params) AdaIN component of an STN
     AdaIN has (in addition to nn.Module attrs): n/a
     """
     def __init__(self):
@@ -122,7 +122,7 @@ class AdaIN(nn.Module):
         - means/stds are computed on a per-channel, per-ex basis
         """
         c_mean = c.mean([2,3], keepdim=True) # (N,512,1,1)
-        c_std = c.std([2,3], keepdim=True) # (N,512,1,1)
+        c_std = c.std([2,3], keepdim=True) + 1e-12 # (N,512,1,1)
         s_mean = s.mean([2,3], keepdim=True) # (N,512,1,1)
         s_std = s.std([2,3], keepdim=True) # (N,512,1,1)
         adain_out = s_std*(c-c_mean)/c_std + s_mean # (N,512,Hc/8,Wc/8)
@@ -178,13 +178,14 @@ class Decoder(nn.Module):
 
 class StyleTransferNet(nn.Module):
     """
-    interp. the Style Transfer Net (STN) of the AdaIN architecture
+    interp. the Style Transfer Net (STN) of the AdaIN architecture, used during inference
     StyleTransferNet has (in addition to nn.Module attrs):
         enc is Encoder - encoder component
         adain is AdaIN - adaptive instance normalization component
         dec is Decoder - decoder component
+        alpha is float[0,1] - style transfer focus
     """
-    def __init__(self,enc,adain,dec):
+    def __init__(self,enc,adain,dec,alpha=1):
         """
         StyleTransferNet Encoder AdaIN Decoder -> StyleTransferNet
         initializes a StyleTransferNet instance
@@ -193,17 +194,18 @@ class StyleTransferNet(nn.Module):
         self.enc = enc
         self.adain = adain
         self.dec = dec
+        self.alpha = alpha
     
     def forward(self,c,s):
         """
         StyleTransferNet tens<float>(N,3,Hc,Wc) tens<float>(N,3,Hs,Ws) -> tens<float>(N,3,Hc,Wc)
-        given content img and style img; returns the generated img
+        given content img and style img; returns the generated img AND AdaIN tgt feats
         """
         c_feats = self.enc(c) # (N,512,Hc/8,Wc/8)
         s_feats = self.enc(s) # (N,512,Hs/8,Ws/8)
         adain_out = self.adain(c_feats,s_feats) # (N,512,Hc/8,Wc/8)
-        gen = self.dec(adain_out) # (N,3,Hc,Wc)
-        return gen
+        gen = self.dec((1-self.alpha)*c_feats + self.alpha*adain_out) # (N,3,Hc,Wc)
+        return gen, adain_out
 
 
 def resize_if_larger(img, thresh):
@@ -239,24 +241,29 @@ def norm_tens_to_denorm_img(tens):
 
 
 if __name__ == "__main__":
-    N = 8 # batch size
-
+    batch_size = 8
+    num_epochs = 1
+    weight_decay = 1e-3
+    lr = 1e-4 * batch_size
+    lbda = 10 # style weight
+    num_workers = 4
     device = torch.device("cuda")
-    # train_dataset = RandomPairDataset("AdaIN_Hayden/data/content/train", "AdaIN_Hayden/data/style/train")
+
+    train_dataset = RandomPairDataset("AdaIN_Hayden/data/content/train", "AdaIN_Hayden/data/style/train")
+    val_dataset = RandomPairDataset("AdaIN_Hayden/data/content/val", "AdaIN_Hayden/data/style/val")
     test_dataset = RandomPairDataset("AdaIN_Hayden/data/content/test", "AdaIN_Hayden/data/style/test")
-    # debug_ex = test_dataset[0]
 
-    # test_loader = DataLoader(test_dataset, batch_size=N, shuffle=False, num_workers=4)
-    test_loader = DataLoader(test_dataset, batch_size=N, shuffle=False, num_workers=20)
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers)
+    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers)
 
-    for batch_id,(content_batch,style_batch) in enumerate(test_loader): # (N,3,224,224) and (N,3,224,224)
-        # debug_tens = content_batch[0,:,:,:] # tens<float>(3,224,224)
-        # debug_tens = style_batch[0,:,:,:] # tens<float>(3,224,224)
-        # debug_img = norm_tens_to_denorm_img(debug_tens) # img<int>(W,H,3)
-        # debug_img.show()
+    
 
-        y = 1
-        # print(batch_id)
+    for epoch in range(0,num_epochs):
+        for batch_id,(content_batch,style_batch) in enumerate(train_loader): # (N,3,224,224) and (N,3,224,224)
+            
+            y = 1
+
 
     x = 1
 
