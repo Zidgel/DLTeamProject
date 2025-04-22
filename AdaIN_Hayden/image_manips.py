@@ -21,8 +21,6 @@ def find_smallest_dimension(folder_path):
     return smallest
 
 
-
-
 def filter_and_remove_small_images(dataset_dir, min_dim, move_to_dir):
     removed_count = 0
     for filename in os.listdir(dataset_dir):
@@ -40,6 +38,7 @@ def filter_and_remove_small_images(dataset_dir, min_dim, move_to_dir):
             print(f"Skipping corrupted image {filename}: {e}")
 
     print(f"Removed/moved {removed_count} images with dimensions < {min_dim}px.")
+
 
 if __name__ == "__main__":
 

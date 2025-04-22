@@ -7,6 +7,7 @@ import numpy as np
 from PIL import Image
 from functools import partial
 import torch
+import torch.nn.functional as F
 from torch import nn, optim
 from torch.utils.data import DataLoader, Dataset
 from torchvision import models, transforms
@@ -80,7 +81,10 @@ class Encoder(nn.Module):
     """
     interp. the (frozen) encoder component of an STN
     Encoder has (in addition to nn.Module attrs):
-        layers is nn.Sequential - partial sequence of frozen layers from VGG-19
+        layers1 is nn.Sequential - frozen layers from VGG-19, up to relu1_1
+        layers2 is nn.Sequential - frozen layers from VGG-19, up to relu2_1
+        layers3 is nn.Sequential - frozen layers from VGG-19, up to relu3_1
+        layers4 is nn.Sequential - frozen layers from VGG-19, up to relu4_1
     """
     def __init__(self):
         """
@@ -88,18 +92,25 @@ class Encoder(nn.Module):
         initializes an Encoder instance
         """
         super().__init__()
-        vgg19 = models.vgg19(pretrained=True).features # nn.Sequential
-        self.layers = vgg19[:21].eval() # all layers up to and including relu4_1
-        for param in self.layers.parameters():
+        vgg19 = models.vgg19(weights=models.VGG19_Weights.DEFAULT).features # nn.Sequential
+        self.layers1 = vgg19[:2] # up to relu1_1
+        self.layers2 = vgg19[2:7] # up to relu2_1
+        self.layers3 = vgg19[7:12] # up to relu3_1
+        self.layers4 = vgg19[12:21] # up to relu4_1
+        for param in self.parameters():
             param.requires_grad = False
+        self.eval()
     
     def forward(self,x):
         """
-        Encoder tens<float>(N,3,H,W) -> tens<float>(N,512,H/8,W/8)
-        given input image; returns extracted features from image
+        Encoder tens<float>(N,3,H,W) -> tens<float>(N,64,H,W) tens<float>(N,128,H/2,W/2) tens<float>(N,256,H/4,W/4) tens<float>(N,512,H/8,W/8)
+        given input image; returns extracted features from image at each of the 4 chosen layers
         """
-        out = self.layers(x) # (N,512,H/8,W/8)
-        return out
+        relu1_1 = self.layers1(x) # (N,64,H,W)
+        relu2_1 = self.layers2(relu1_1) # (N,128,H/2,W/2)
+        relu3_1 = self.layers3(relu2_1) # (N,256,H/4,W/4)
+        relu4_1 = self.layers4(relu3_1) # (N,512,H/8,W/8)
+        return relu1_1,relu2_1,relu3_1,relu4_1
     
 
 class AdaIN(nn.Module):
@@ -166,6 +177,14 @@ class Decoder(nn.Module):
             nn.ReLU(),
             nn.Conv2d(64, 3, kernel_size=3, stride=1, padding=1, padding_mode="reflect"), # (N,3,H,W)
         )
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                if m is self.layers[-1]:
+                    nn.init.normal_(m.weight, mean=0, std=0.01)
+                else:
+                    nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0)
 
     def forward(self,x):
         """
@@ -178,7 +197,7 @@ class Decoder(nn.Module):
 
 class StyleTransferNet(nn.Module):
     """
-    interp. the Style Transfer Net (STN) of the AdaIN architecture, used during inference
+    interp. the Style Transfer Net (STN) of the AdaIN architecture
     StyleTransferNet has (in addition to nn.Module attrs):
         enc is Encoder - encoder component
         adain is AdaIN - adaptive instance normalization component
@@ -198,14 +217,15 @@ class StyleTransferNet(nn.Module):
     
     def forward(self,c,s):
         """
-        StyleTransferNet tens<float>(N,3,Hc,Wc) tens<float>(N,3,Hs,Ws) -> tens<float>(N,3,Hc,Wc)
-        given content img and style img; returns the generated img AND AdaIN tgt feats
+        StyleTransferNet tens<float>(N,3,Hc,Wc) tens<float>(N,3,Hs,Ws) 
+        -> tens<float>(N,3,Hc,Wc) tens<float>(N,512,Hc/8,Wc/8) tens<float>(N,64,Hs,Ws) tens<float>(N,128,Hs/2,Ws/2) tens<float>(N,256,Hs/4,Ws/4) tens<float>(N,512,Hs/8,Ws/8)
+        given content img and style img; returns the generated img AND AdaIN output feats (t) AND style feats at each chosen layer
         """
-        c_feats = self.enc(c) # (N,512,Hc/8,Wc/8)
-        s_feats = self.enc(s) # (N,512,Hs/8,Ws/8)
-        adain_out = self.adain(c_feats,s_feats) # (N,512,Hc/8,Wc/8)
-        gen = self.dec((1-self.alpha)*c_feats + self.alpha*adain_out) # (N,3,Hc,Wc)
-        return gen, adain_out
+        _,_,_,c_41 = self.enc(c) # (N,512,Hc/8,Wc/8)
+        s_11,s_21,s_31,s_41 = self.enc(s) # (N,64,Hs,Ws) (N,128,Hs/2,Ws/2) (N,256,Hs/4,Ws/4) (N,512,Hs/8,Ws/8)
+        t = self.adain(c_41,s_41) # (N,512,Hc/8,Wc/8)
+        gen = self.dec((1-self.alpha)*c_41 + self.alpha*t) # (N,3,Hc,Wc)
+        return gen,t,s_11,s_21,s_31,s_41
 
 
 def resize_if_larger(img, thresh):
@@ -229,24 +249,37 @@ def norm_tens_to_denorm_img(tens):
     tens<float>(3,H,W) -> img<int>(W,H,3)
     given normalized tensor; returns denormalized PIL image
     """
-    vgg_mean_tens = torch.tensor(vgg_mean).view(-1,1,1) # (3,1,1)
-    vgg_std_tens = torch.tensor(vgg_std).view(-1,1,1) # (3,1,1)
+    device = tens.device
+    vgg_mean_tens = torch.tensor(vgg_mean, device=device).view(-1,1,1) # (3,1,1)
+    vgg_std_tens = torch.tensor(vgg_std, device=device).view(-1,1,1) # (3,1,1)
     denorm_tens = tens*vgg_std_tens + vgg_mean_tens # (3,H,W)
     clamped_tens = torch.clamp(denorm_tens, 0, 1)
     to_pil = transforms.ToPILImage() # tens<float>(3,H,W) -> img<int>(W,H,3)
-    pil_img = to_pil(clamped_tens) # img<int>(W,H,3)
+    pil_img = to_pil(clamped_tens.cpu()) # img<int>(W,H,3)
     return pil_img
 
+
+def calc_mean_std_loss(g,s):
+    """
+    tens<float>(N,C,H,W) tens<float>(N,C,H,W) -> tens<float>()
+    given gen img feats and style img feats (for a particular chosen layer); returns style loss for this layer
+    """
+    g_mean = g.mean([2,3]) # (N,C)
+    g_std = g.std([2,3]) # (N,C)
+    s_mean = s.mean([2,3]) # (N,C)
+    s_std = s.std([2,3]) # (N,C)
+    style_loss = F.mse_loss(g_mean,s_mean) + F.mse_loss(g_std,s_std)
+    return style_loss
 
 
 
 if __name__ == "__main__":
     batch_size = 8
+    lr = 1e-4 * batch_size
     num_epochs = 1
     weight_decay = 1e-3
-    lr = 1e-4 * batch_size
-    lbda = 10 # style weight
-    num_workers = 4
+    lbda = 1 # style weight
+    num_workers = 1
     device = torch.device("cuda")
 
     train_dataset = RandomPairDataset("AdaIN_Hayden/data/content/train", "AdaIN_Hayden/data/style/train")
@@ -257,12 +290,32 @@ if __name__ == "__main__":
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers)
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers)
 
-    
+    enc = Encoder().to(device)
+    adain = AdaIN().to(device)
+    dec = Decoder().to(device)
+    stn = StyleTransferNet(enc,adain,dec).to(device)
+    opt = optim.AdamW(dec.parameters(), lr=lr, weight_decay=weight_decay)
 
     for epoch in range(0,num_epochs):
-        for batch_id,(content_batch,style_batch) in enumerate(train_loader): # (N,3,224,224) and (N,3,224,224)
-            
-            y = 1
+        for batch_id,(c_img,s_img) in enumerate(train_loader): # (N,3,224,224) and (N,3,224,224)
+            c_img = c_img.to(device)
+            s_img = s_img.to(device)
+            gen_img,t,s_11,s_21,s_31,s_41 = stn(c_img,s_img) # (N,3,224,224) (N,512,28,28) (N,64,224,224) (N,128,112,112) (N,256,56,56) (N,512,28,28)
+
+            g_11,g_21,g_31,g_41 = enc(gen_img) # (N,64,224,224) (N,128,112,112) (N,256,56,56) (N,512,28,28)
+            loss_c = F.mse_loss(g_41, t)
+            loss_s = 0
+            for g_feat,s_feat in zip([g_11,g_21,g_31,g_41], [s_11,s_21,s_31,s_41]): # relu1_1, relu2_1, relu3_1, relu4_1
+                loss_s += calc_mean_std_loss(g_feat,s_feat)
+            loss_tot = loss_c + lbda*loss_s
+
+            opt.zero_grad()
+            loss_tot.backward()
+            opt.step()
+
+            if batch_id%10==0:
+                print(f"Epoch {epoch+1}, Batch {batch_id+1}, Content Loss: {loss_c.item():.4f}, Style Loss: {loss_s.item():.4f}, Total Loss: {loss_tot.item():.4f}")
+
 
 
     x = 1
