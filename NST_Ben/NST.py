@@ -1,136 +1,149 @@
+#!/usr/bin/env python3
+"""
+Neural-Style-Transfer (VGG-19, PyTorch) — cleaned-up reference
+"""
+
 import torch
-import torch.optim as optim
 import torch.nn.functional as F
-import torchvision.models as models
+import torch.optim as optim
+from torchvision import models, transforms
 from torchvision.models import VGG19_Weights
-import torchvision.transforms as transforms
-import numpy as np
 from PIL import Image
 import matplotlib.pyplot as plt
+from pathlib import Path
+
+# ────────────────────────── 0. Hyper-params ──────────────────────────
+MAX_SIZE            = 680         # longest edge (pixels)
+STYLE_WEIGHT        = 1e10
+CONTENT_WEIGHT      = 1.0
+TV_WEIGHT           = 1e-6
+LR                  = 3e-3
+LR_DECAY_EVERY      = 400         # iterations
+LR_GAMMA            = 0.6
+ITERATIONS          = 2000
+CLAMP_RANGE         = (-2.5, 2.5) # roughly ±5 σ in ImageNet space
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
 
+# ─────────────────────── 1. Pre-/post-processing ──────────────────────
+imagenet_mean = torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1)
+imagenet_std  = torch.tensor([0.229, 0.224, 0.225]).view(3, 1, 1)
 
-# standardize input images. 
-transform = transforms.Compose([
-    transforms.Resize((680, 680)),
+preprocess = transforms.Compose([
+    transforms.Resize(MAX_SIZE, interpolation=transforms.InterpolationMode.LANCZOS),
+    transforms.CenterCrop(MAX_SIZE),
     transforms.ToTensor(),
-    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]), #TODO play around with normalizaiton factor?
+    transforms.Normalize(mean=imagenet_mean.squeeze(), std=imagenet_std.squeeze()),
 ])
 
-#load images and convert them to the same colorset
-def load_image(image_path, to_grayscale=False):
-    """Loads an image and optionally converts it to grayscale."""
-    image = Image.open(image_path)
-    if to_grayscale:
-        image = image.convert("L").convert("RGB")
-    else:
-        image = image.convert("RGB")
-    image = transform(image).unsqueeze(0)
-    return image.to(device)
+def load_image(path: str) -> torch.Tensor:
+    img = Image.open(path).convert("RGB")
+    return preprocess(img).unsqueeze(0).to(device)
 
-content_image = load_image("yorkshire-terrier-sitting-on-decking.jpg", to_grayscale=False)
-style_image = load_image("Van_Gogh_-_Starry_Night_-_Google_Art_Project.jpg.webp") #Van_Gogh_-_Starry_Night_-_Google_Art_Project.jpg.webp
-#output_panels/panel_0.png
+def denormalize(img: torch.Tensor) -> torch.Tensor:
+    return (img.cpu() * imagenet_std + imagenet_mean).clamp(0, 1)
 
-# Using the VGG19 model weights for feature extraction and transfer
-vgg = models.vgg19(weights=VGG19_Weights.DEFAULT).features.to(device).eval()
-for param in vgg.parameters():
-    param.requires_grad_(False)
-
-
-def extract_features(image, model, layers=None):
-    """Extracts features from specified layers of the model."""
-    if layers is None:
-        layers = {
-            '0': 'conv1_1', '5': 'conv2_1', '10': 'conv3_1',
-            '19': 'conv4_1', '21': 'content'
-        }
-    features = {}
-    x = image
-    for name, layer in model._modules.items():
-        x = layer(x)
-        if name in layers:
-            features[layers[name]] = x
-    return features
-
-
-def gram_matrix(tensor):
-    """Computes the Gram matrix for style loss."""
-    _, d, h, w = tensor.size()
-    tensor = tensor.view(d, h * w)
-    return torch.mm(tensor, tensor.t()) / (d * h * w)
-
-def style_loss(target_features, style_features):
-    """Computes style loss."""
-    loss = 0
-    for layer in style_features:
-        target_gram = gram_matrix(target_features[layer])
-        style_gram = gram_matrix(style_features[layer])
-        loss += F.mse_loss(target_gram, style_gram)
-    return loss
-
-def content_loss(target_features, content_features):
-    """Computes content loss."""
-    return F.mse_loss(target_features['content'], content_features['content'])
-
-
-content_features = extract_features(content_image, vgg)
-style_features = extract_features(style_image, vgg)
-
-
-target = content_image.clone().requires_grad_(True).to(device)
-
-
-epochs = 1000
-learning_rate = 0.1
-style_weight = 1e10  #Weighting for style loss
-content_weight = 1  
-step_size = 250
-gamma = 0.6
-
-optimizer = optim.Adam([target], lr=learning_rate)
-scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=step_size, gamma=gamma)
-
-for epoch in range(epochs):
-    optimizer.zero_grad()
-    
-    target_features = extract_features(target, vgg)
-    s_loss = style_loss(target_features, style_features)
-    c_loss = content_loss(target_features, content_features)
-    
-
-    total_loss = style_weight * s_loss + content_weight * c_loss
-    total_loss.backward()
-    optimizer.step()
-    scheduler.step()
-
-    if epoch % 100 == 0:
-        print(f"Epoch {epoch}, Style Loss: {s_loss.item():.6f}, Content Loss: {c_loss.item():.6f}, Total Loss: {total_loss.item():.6f}")
-
-def denormalize_image(tensor):
-
-    mean = torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1)
-    std = torch.tensor([0.229, 0.224, 0.225]).view(3, 1, 1)
-    tensor = tensor.cpu().clone() * std + mean  
-    return tensor.clamp(0, 1)
-
-def show_image(tensor_image, title="Styled Image"):
-    
-    image = tensor_image.cpu().clone().detach()  
-    image = image.squeeze(0)  
-    image = transforms.ToPILImage()(image)
-
-    plt.imshow(image)
+def show(img: torch.Tensor, title: str = "") -> None:
+    plt.imshow(transforms.ToPILImage()(denormalize(img.squeeze(0))))
     plt.title(title)
-    plt.axis("off")  
+    plt.axis("off")
     plt.show()
 
+# ───────────────────────── 2. VGG encoder ────────────────────────────
+vgg = models.vgg19(weights=VGG19_Weights.DEFAULT).features
+for idx, m in enumerate(vgg):
+    if isinstance(m, torch.nn.MaxPool2d):
+        vgg[idx] = torch.nn.AvgPool2d(kernel_size=m.kernel_size,
+                                      stride=m.stride,
+                                      padding=m.padding)
+vgg.eval().requires_grad_(False).to(device)
 
-styled_image = denormalize_image(target.cpu().squeeze(0)) 
-show_image(styled_image)
+layer_map = {
+    '0':  'conv1_1',
+    '5':  'conv2_1',
+    '10': 'conv3_1',
+    '19': 'conv4_1',
+    '21': 'content',      # conv4_2 in the original Gatys et al.
+    '28': 'conv5_1',
+}
 
-styled_pil = transforms.ToPILImage()(styled_image)
-styled_pil.save("stylized_output.png")
-print("Styled image saved as stylized_output.png")
+def extract_feats(x: torch.Tensor):
+    feats = {}
+    for name, layer in vgg._modules.items():
+        x = layer(x)
+        if name in layer_map:
+            feats[layer_map[name]] = x
+    return feats
+
+def gram(x: torch.Tensor) -> torch.Tensor:
+    b, c, h, w = x.size()
+    x = x.reshape(c, h * w)
+    return x @ x.t() / (c * h * w)
+
+# ─────────────────────────── 3. Losses ───────────────────────────────
+def style_loss(tgt, sty):
+    return sum(F.mse_loss(gram(tgt[l]), gram(sty[l])) for l in sty)
+
+def content_loss(tgt, cont):
+    return F.mse_loss(tgt['content'], cont['content'])
+
+def tv_loss(img):
+    x_diff = img[:, :, :-1, :] - img[:, :, 1:, :]
+    y_diff = img[:, :, :, :-1] - img[:, :, :, 1:]
+    return F.l1_loss(x_diff, torch.zeros_like(x_diff)) + \
+           F.l1_loss(y_diff, torch.zeros_like(y_diff))
+
+# ─────────────────────────── 4. Main loop ────────────────────────────
+def neural_style_transfer(content_path: str, style_path: str,
+                          out_path: str = "stylised.png") -> None:
+
+    content = load_image(content_path)
+    style   = load_image(style_path)
+
+    with torch.no_grad():
+        content_feats = extract_feats(content)
+        style_feats   = extract_feats(style)
+
+    target = content.clone().requires_grad_(True)
+
+    optimiser = optim.Adam([target], lr=LR)
+    scheduler = optim.lr_scheduler.StepLR(optimiser,
+                                          step_size=LR_DECAY_EVERY,
+                                          gamma=LR_GAMMA)
+
+    for it in range(ITERATIONS + 1):
+        optimiser.zero_grad()
+
+        t_feats = extract_feats(target)
+        s_loss  = style_loss(t_feats, style_feats)
+        c_loss  = content_loss(t_feats, content_feats)
+        tvl     = tv_loss(target)
+
+        loss = (STYLE_WEIGHT * s_loss +
+                CONTENT_WEIGHT * c_loss +
+                TV_WEIGHT * tvl)
+        loss.backward()
+        optimiser.step()
+        with torch.no_grad():
+            target.clamp_(*CLAMP_RANGE)
+        scheduler.step()
+
+        if it % 100 == 0 or it == ITERATIONS:
+            print(f"[{it:4d}/{ITERATIONS}] "
+                  f"style={s_loss:8.4f}  content={c_loss:8.4f}  tv={tvl:8.4f}")
+
+    # ──────────────────── 5. Save / display result ──────────────────
+    img_out = denormalize(target.squeeze(0))
+    out_pil = transforms.ToPILImage()(img_out)
+    out_pil.save(out_path)
+    print(f"✓ Saved → {Path(out_path).resolve()}")
+    show(target, "Stylised Result")
+
+# ──────────────────────────── 6. Entry ──────────────────────────────
+if __name__ == "__main__":
+    neural_style_transfer(
+        content_path="../ContentImages/ILSVRC2012_test_00000004.JPEG",
+        style_path="../StyleData/panel_99.png",
+        out_path="stylised_output.png",
+    )

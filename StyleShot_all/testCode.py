@@ -4,6 +4,10 @@ from torchvision import datasets, transforms
 from PIL import Image
 from pathlib import Path
 from itertools import cycle
+
+
+
+HED_dataset = datasets.BSDS500(root="../HED-BSDS500", split="train", download=True)
 """
 NOT TOTALLY SURE ABOUT THE TRAINING PROCESS HERE REQUIRES ANALYSIS
 
