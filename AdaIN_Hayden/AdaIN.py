@@ -1,8 +1,7 @@
 # Hayden Schennum
 # 2025-04-19
 
-import os
-import random
+import os, random, math, time
 import numpy as np
 from PIL import Image
 from functools import partial
@@ -12,16 +11,16 @@ from torch import nn, optim
 from torch.utils.data import DataLoader, Dataset
 from torchvision import models, transforms
 
+
 vgg_mean = [0.485, 0.456, 0.406]
 vgg_std = [0.229, 0.224, 0.225]
-
 
 def set_seed(seed):
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
 set_seed(3)
+torch.use_deterministic_algorithms(True)
 
 
 class RandomPairDataset(Dataset):
@@ -153,29 +152,29 @@ class Decoder(nn.Module):
         """
         super().__init__()
         self.layers = nn.Sequential(
-            nn.Conv2d(512, 256, kernel_size=3, stride=1, padding=1, padding_mode="reflect"), # (N,256,H/8,W/8)
+            nn.Conv2d(512, 256, kernel_size=3, stride=1, padding=1, padding_mode="zeros"), # (N,256,H/8,W/8)
             nn.ReLU(),
             nn.Upsample(scale_factor=2, mode="nearest"), # (N,256,H/4,W/4)
 
-            nn.Conv2d(256, 256, kernel_size=3, stride=1, padding=1, padding_mode="reflect"), # (N,256,H/4,W/4)
+            nn.Conv2d(256, 256, kernel_size=3, stride=1, padding=1, padding_mode="zeros"), # (N,256,H/4,W/4)
             nn.ReLU(),
-            nn.Conv2d(256, 256, kernel_size=3, stride=1, padding=1, padding_mode="reflect"), # (N,256,H/4,W/4)
+            nn.Conv2d(256, 256, kernel_size=3, stride=1, padding=1, padding_mode="zeros"), # (N,256,H/4,W/4)
             nn.ReLU(),
-            nn.Conv2d(256, 256, kernel_size=3, stride=1, padding=1, padding_mode="reflect"), # (N,256,H/4,W/4)
+            nn.Conv2d(256, 256, kernel_size=3, stride=1, padding=1, padding_mode="zeros"), # (N,256,H/4,W/4)
             nn.ReLU(),
-            nn.Conv2d(256, 128, kernel_size=3, stride=1, padding=1, padding_mode="reflect"), # (N,128,H/4,W/4)
+            nn.Conv2d(256, 128, kernel_size=3, stride=1, padding=1, padding_mode="zeros"), # (N,128,H/4,W/4)
             nn.ReLU(),
             nn.Upsample(scale_factor=2, mode="nearest"), # (N,128,H/2,W/2)
 
-            nn.Conv2d(128, 128, kernel_size=3, stride=1, padding=1, padding_mode="reflect"), # (N,128,H/2,W/2)
+            nn.Conv2d(128, 128, kernel_size=3, stride=1, padding=1, padding_mode="zeros"), # (N,128,H/2,W/2)
             nn.ReLU(),
-            nn.Conv2d(128, 64, kernel_size=3, stride=1, padding=1, padding_mode="reflect"), # (N,64,H/2,W/2)
+            nn.Conv2d(128, 64, kernel_size=3, stride=1, padding=1, padding_mode="zeros"), # (N,64,H/2,W/2)
             nn.ReLU(),
             nn.Upsample(scale_factor=2, mode="nearest"), # (N,64,H,W)
 
-            nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=1, padding_mode="reflect"), # (N,64,H,W)
+            nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=1, padding_mode="zeros"), # (N,64,H,W)
             nn.ReLU(),
-            nn.Conv2d(64, 3, kernel_size=3, stride=1, padding=1, padding_mode="reflect"), # (N,3,H,W)
+            nn.Conv2d(64, 3, kernel_size=3, stride=1, padding=1, padding_mode="zeros"), # (N,3,H,W)
         )
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
@@ -274,30 +273,43 @@ def calc_mean_std_loss(g,s):
 
 
 if __name__ == "__main__":
-    batch_size = 8
-    lr = 1e-4 * batch_size
     num_epochs = 1
-    weight_decay = 1e-3
+    N = 8 # batch size
+    lr = 1e-3 # learning rate
+    wd = 1e-3 # weight decay
     lbda = 1 # style weight
-    num_workers = 1
+    num_workers = 4
     device = torch.device("cuda")
 
     train_dataset = RandomPairDataset("AdaIN_Hayden/data/content/train", "AdaIN_Hayden/data/style/train")
     val_dataset = RandomPairDataset("AdaIN_Hayden/data/content/val", "AdaIN_Hayden/data/style/val")
     test_dataset = RandomPairDataset("AdaIN_Hayden/data/content/test", "AdaIN_Hayden/data/style/test")
 
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers)
-    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers)
+    train_loader = DataLoader(train_dataset, batch_size=N, shuffle=True, num_workers=num_workers)
+    val_loader = DataLoader(val_dataset, batch_size=N, shuffle=False, num_workers=num_workers)
+    test_loader = DataLoader(test_dataset, batch_size=N, shuffle=False, num_workers=num_workers)
 
     enc = Encoder().to(device)
     adain = AdaIN().to(device)
     dec = Decoder().to(device)
     stn = StyleTransferNet(enc,adain,dec).to(device)
-    opt = optim.AdamW(dec.parameters(), lr=lr, weight_decay=weight_decay)
+    opt = optim.AdamW(dec.parameters(), lr=lr, weight_decay=wd)
 
-    for epoch in range(0,num_epochs):
-        for batch_id,(c_img,s_img) in enumerate(train_loader): # (N,3,224,224) and (N,3,224,224)
+    num_exs_train = len(train_dataset)
+    num_batches_train = math.ceil(num_exs_train/N)
+    num_exs_val = len(val_dataset)
+    num_batches_val = math.ceil(num_exs_val/N)
+    num_exs_test = len(test_dataset)
+    num_batches_test = math.ceil(num_exs_test/N)
+
+    best_val_loss = float("inf")
+    print("Entering epochs loop")
+    for epoch in range(1,num_epochs+1):
+        cumul_loss_c = 0
+        cumul_loss_s = 0
+        cumul_loss_tot = 0
+        start_time = time.time()
+        for batch_id,(c_img,s_img) in enumerate(train_loader,1): # (N,3,224,224) and (N,3,224,224)
             c_img = c_img.to(device)
             s_img = s_img.to(device)
             gen_img,t,s_11,s_21,s_31,s_41 = stn(c_img,s_img) # (N,3,224,224) (N,512,28,28) (N,64,224,224) (N,128,112,112) (N,256,56,56) (N,512,28,28)
@@ -313,12 +325,76 @@ if __name__ == "__main__":
             loss_tot.backward()
             opt.step()
 
-            if batch_id%10==0:
-                print(f"Epoch {epoch+1}, Batch {batch_id+1}, Content Loss: {loss_c.item():.4f}, Style Loss: {loss_s.item():.4f}, Total Loss: {loss_tot.item():.4f}")
+            cumul_loss_c += loss_c.item()
+            cumul_loss_s += loss_s.item()
+            cumul_loss_tot += loss_tot.item()
+            cur_time = time.time() - start_time
+
+            if batch_id%100==0:
+                print(f"TRAIN: Epoch {epoch}/{num_epochs}, Batch {batch_id}/{num_batches_train}, Time {cur_time}, "
+                      f"Avg L_c: {cumul_loss_c/batch_id:.4f}, Avg L_s: {cumul_loss_s/batch_id:.4f}, Avg L_tot: {cumul_loss_tot/batch_id:.4f}")
+            if batch_id==1000: break # NOTE: debugging only
+        print(f"\nTRAIN: End of Epoch {epoch}/{num_epochs}, Avg L_c: {cumul_loss_c/batch_id:.4f}, Avg L_s: {cumul_loss_s/batch_id:.4f}, Avg L_tot: {cumul_loss_tot/batch_id:.4f}\n")
+
+        cumul_loss_c = 0
+        cumul_loss_s = 0
+        cumul_loss_tot = 0
+        start_time = time.time()
+        with torch.no_grad():
+            for batch_id,(c_img,s_img) in enumerate(val_loader,1): # (N,3,224,224) and (N,3,224,224)
+                c_img = c_img.to(device)
+                s_img = s_img.to(device)
+                gen_img,t,s_11,s_21,s_31,s_41 = stn(c_img,s_img) # (N,3,224,224) (N,512,28,28) (N,64,224,224) (N,128,112,112) (N,256,56,56) (N,512,28,28)
+
+                g_11,g_21,g_31,g_41 = enc(gen_img) # (N,64,224,224) (N,128,112,112) (N,256,56,56) (N,512,28,28)
+                loss_c = F.mse_loss(g_41, t)
+                loss_s = 0
+                for g_feat,s_feat in zip([g_11,g_21,g_31,g_41], [s_11,s_21,s_31,s_41]): # relu1_1, relu2_1, relu3_1, relu4_1
+                    loss_s += calc_mean_std_loss(g_feat,s_feat)
+                loss_tot = loss_c + lbda*loss_s
+
+                cumul_loss_c += loss_c.item()
+                cumul_loss_s += loss_s.item()
+                cumul_loss_tot += loss_tot.item()
+                cur_time = time.time() - start_time
+
+                if batch_id%100==0:
+                    print(f"VAL: Epoch {epoch}/{num_epochs}, Batch {batch_id}/{num_batches_val}, Time {cur_time}, "
+                          f"Avg L_c: {cumul_loss_c/batch_id:.4f}, Avg L_s: {cumul_loss_s/batch_id:.4f}, Avg L_tot: {cumul_loss_tot/batch_id:.4f}")
+        print(f"\VAL: End of Epoch {epoch}/{num_epochs}, Avg L_c: {cumul_loss_c/batch_id:.4f}, Avg L_s: {cumul_loss_s/batch_id:.4f}, Avg L_tot: {cumul_loss_tot/batch_id:.4f}\n")
+        avg_val_loss = cumul_loss_tot / batch_id
+        if avg_val_loss < best_val_loss:
+            best_val_loss = avg_val_loss
+    
+    cumul_loss_c = 0
+    cumul_loss_s = 0
+    cumul_loss_tot = 0
+    start_time = time.time()
+    with torch.no_grad():
+        for batch_id,(c_img,s_img) in enumerate(test_loader,1): # (N,3,224,224) and (N,3,224,224)
+            c_img = c_img.to(device)
+            s_img = s_img.to(device)
+            gen_img,t,s_11,s_21,s_31,s_41 = stn(c_img,s_img) # (N,3,224,224) (N,512,28,28) (N,64,224,224) (N,128,112,112) (N,256,56,56) (N,512,28,28)
+
+            g_11,g_21,g_31,g_41 = enc(gen_img) # (N,64,224,224) (N,128,112,112) (N,256,56,56) (N,512,28,28)
+            loss_c = F.mse_loss(g_41, t)
+            loss_s = 0
+            for g_feat,s_feat in zip([g_11,g_21,g_31,g_41], [s_11,s_21,s_31,s_41]): # relu1_1, relu2_1, relu3_1, relu4_1
+                loss_s += calc_mean_std_loss(g_feat,s_feat)
+            loss_tot = loss_c + lbda*loss_s
+
+            cumul_loss_c += loss_c.item()
+            cumul_loss_s += loss_s.item()
+            cumul_loss_tot += loss_tot.item()
+            cur_time = time.time() - start_time
+
+            if batch_id%100==0:
+                print(f"TEST: Epoch {epoch}/{num_epochs}, Batch {batch_id}/{num_batches_test}, Time {cur_time}, "
+                        f"Avg L_c: {cumul_loss_c/batch_id:.4f}, Avg L_s: {cumul_loss_s/batch_id:.4f}, Avg L_tot: {cumul_loss_tot/batch_id:.4f}") 
+    print(f"\TEST: End of final test, Avg L_c: {cumul_loss_c/batch_id:.4f}, Avg L_s: {cumul_loss_s/batch_id:.4f}, Avg L_tot: {cumul_loss_tot/batch_id:.4f}\n")
 
 
 
-    x = 1
 
 
 
