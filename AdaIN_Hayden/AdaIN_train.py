@@ -8,7 +8,7 @@ from functools import partial
 import torch
 import torch.nn.functional as F
 from torch import nn, optim
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader, Dataset, Subset
 from torchvision import models, transforms
 
 
@@ -273,17 +273,22 @@ def calc_mean_std_loss(g,s):
 
 
 if __name__ == "__main__":
-    num_epochs = 1
+    num_epochs = 2
     N = 8 # batch size
     lr = 1e-3 # learning rate
     wd = 1e-3 # weight decay
     lbda = 1 # style weight
     num_workers = 4
-    device = torch.device("cuda")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     train_dataset = RandomPairDataset("AdaIN_Hayden/data/content/train", "AdaIN_Hayden/data/style/train")
     val_dataset = RandomPairDataset("AdaIN_Hayden/data/content/val", "AdaIN_Hayden/data/style/val")
     test_dataset = RandomPairDataset("AdaIN_Hayden/data/content/test", "AdaIN_Hayden/data/style/test")
+
+    # for debugging / course tuning
+    train_dataset = Subset(train_dataset, list(range(len(train_dataset)//10)))
+    val_dataset = Subset(val_dataset, list(range(len(val_dataset)//10)))
+    test_dataset = Subset(test_dataset, list(range(len(test_dataset)//10)))
 
     train_loader = DataLoader(train_dataset, batch_size=N, shuffle=True, num_workers=num_workers)
     val_loader = DataLoader(val_dataset, batch_size=N, shuffle=False, num_workers=num_workers)
@@ -328,13 +333,13 @@ if __name__ == "__main__":
             cumul_loss_c += loss_c.item()
             cumul_loss_s += loss_s.item()
             cumul_loss_tot += loss_tot.item()
-            cur_time = time.time() - start_time
 
             if batch_id%100==0:
-                print(f"TRAIN: Epoch {epoch}/{num_epochs}, Batch {batch_id}/{num_batches_train}, Time {cur_time}, "
+                print(f"TRAIN: Epoch {epoch}/{num_epochs}, Batch {batch_id}/{num_batches_train}, Time {time.time()-start_time}, "
                       f"Avg L_c: {cumul_loss_c/batch_id:.4f}, Avg L_s: {cumul_loss_s/batch_id:.4f}, Avg L_tot: {cumul_loss_tot/batch_id:.4f}")
-            if batch_id==1000: break # NOTE: debugging only
+            # if batch_id==1000: break # NOTE: debugging only
         print(f"\nTRAIN: End of Epoch {epoch}/{num_epochs}, Avg L_c: {cumul_loss_c/batch_id:.4f}, Avg L_s: {cumul_loss_s/batch_id:.4f}, Avg L_tot: {cumul_loss_tot/batch_id:.4f}\n")
+
 
         cumul_loss_c = 0
         cumul_loss_s = 0
@@ -356,42 +361,45 @@ if __name__ == "__main__":
                 cumul_loss_c += loss_c.item()
                 cumul_loss_s += loss_s.item()
                 cumul_loss_tot += loss_tot.item()
-                cur_time = time.time() - start_time
 
                 if batch_id%100==0:
-                    print(f"VAL: Epoch {epoch}/{num_epochs}, Batch {batch_id}/{num_batches_val}, Time {cur_time}, "
+                    print(f"VAL: Epoch {epoch}/{num_epochs}, Batch {batch_id}/{num_batches_val}, Time {time.time()-start_time}, "
                           f"Avg L_c: {cumul_loss_c/batch_id:.4f}, Avg L_s: {cumul_loss_s/batch_id:.4f}, Avg L_tot: {cumul_loss_tot/batch_id:.4f}")
-        print(f"\VAL: End of Epoch {epoch}/{num_epochs}, Avg L_c: {cumul_loss_c/batch_id:.4f}, Avg L_s: {cumul_loss_s/batch_id:.4f}, Avg L_tot: {cumul_loss_tot/batch_id:.4f}\n")
+        print(f"\nVAL: End of Epoch {epoch}/{num_epochs}, Avg L_c: {cumul_loss_c/batch_id:.4f}, Avg L_s: {cumul_loss_s/batch_id:.4f}, Avg L_tot: {cumul_loss_tot/batch_id:.4f}\n")
         avg_val_loss = cumul_loss_tot / batch_id
         if avg_val_loss < best_val_loss:
             best_val_loss = avg_val_loss
+            model_filename = f"decoder_epoch{epoch}_N{N}_lr{lr}_wd{wd}_lbda{lbda}_vloss{avg_val_loss:.4f}.pt"
+            save_path = os.path.join("AdaIN_Hayden/checkpoints", model_filename)
+            torch.save(dec.state_dict(), save_path)
+            print(f"Saved new best model to {save_path}")
     
-    cumul_loss_c = 0
-    cumul_loss_s = 0
-    cumul_loss_tot = 0
-    start_time = time.time()
-    with torch.no_grad():
-        for batch_id,(c_img,s_img) in enumerate(test_loader,1): # (N,3,224,224) and (N,3,224,224)
-            c_img = c_img.to(device)
-            s_img = s_img.to(device)
-            gen_img,t,s_11,s_21,s_31,s_41 = stn(c_img,s_img) # (N,3,224,224) (N,512,28,28) (N,64,224,224) (N,128,112,112) (N,256,56,56) (N,512,28,28)
 
-            g_11,g_21,g_31,g_41 = enc(gen_img) # (N,64,224,224) (N,128,112,112) (N,256,56,56) (N,512,28,28)
-            loss_c = F.mse_loss(g_41, t)
-            loss_s = 0
-            for g_feat,s_feat in zip([g_11,g_21,g_31,g_41], [s_11,s_21,s_31,s_41]): # relu1_1, relu2_1, relu3_1, relu4_1
-                loss_s += calc_mean_std_loss(g_feat,s_feat)
-            loss_tot = loss_c + lbda*loss_s
+    # cumul_loss_c = 0
+    # cumul_loss_s = 0
+    # cumul_loss_tot = 0
+    # start_time = time.time()
+    # with torch.no_grad():
+    #     for batch_id,(c_img,s_img) in enumerate(test_loader,1): # (N,3,224,224) and (N,3,224,224)
+    #         c_img = c_img.to(device)
+    #         s_img = s_img.to(device)
+    #         gen_img,t,s_11,s_21,s_31,s_41 = stn(c_img,s_img) # (N,3,224,224) (N,512,28,28) (N,64,224,224) (N,128,112,112) (N,256,56,56) (N,512,28,28)
 
-            cumul_loss_c += loss_c.item()
-            cumul_loss_s += loss_s.item()
-            cumul_loss_tot += loss_tot.item()
-            cur_time = time.time() - start_time
+    #         g_11,g_21,g_31,g_41 = enc(gen_img) # (N,64,224,224) (N,128,112,112) (N,256,56,56) (N,512,28,28)
+    #         loss_c = F.mse_loss(g_41, t)
+    #         loss_s = 0
+    #         for g_feat,s_feat in zip([g_11,g_21,g_31,g_41], [s_11,s_21,s_31,s_41]): # relu1_1, relu2_1, relu3_1, relu4_1
+    #             loss_s += calc_mean_std_loss(g_feat,s_feat)
+    #         loss_tot = loss_c + lbda*loss_s
 
-            if batch_id%100==0:
-                print(f"TEST: Epoch {epoch}/{num_epochs}, Batch {batch_id}/{num_batches_test}, Time {cur_time}, "
-                        f"Avg L_c: {cumul_loss_c/batch_id:.4f}, Avg L_s: {cumul_loss_s/batch_id:.4f}, Avg L_tot: {cumul_loss_tot/batch_id:.4f}") 
-    print(f"\TEST: End of final test, Avg L_c: {cumul_loss_c/batch_id:.4f}, Avg L_s: {cumul_loss_s/batch_id:.4f}, Avg L_tot: {cumul_loss_tot/batch_id:.4f}\n")
+    #         cumul_loss_c += loss_c.item()
+    #         cumul_loss_s += loss_s.item()
+    #         cumul_loss_tot += loss_tot.item()
+
+    #         if batch_id%100==0:
+    #             print(f"TEST: Epoch {epoch}/{num_epochs}, Batch {batch_id}/{num_batches_test}, Time {time.time()-start_time}, "
+    #                     f"Avg L_c: {cumul_loss_c/batch_id:.4f}, Avg L_s: {cumul_loss_s/batch_id:.4f}, Avg L_tot: {cumul_loss_tot/batch_id:.4f}") 
+    # print(f"\nTEST: End of final test, Avg L_c: {cumul_loss_c/batch_id:.4f}, Avg L_s: {cumul_loss_s/batch_id:.4f}, Avg L_tot: {cumul_loss_tot/batch_id:.4f}\n")
 
 
 
