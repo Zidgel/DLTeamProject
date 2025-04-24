@@ -10,18 +10,18 @@ os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 resize_transform = transforms.Compose([
             transforms.Lambda(partial(resize_if_larger, thresh=224)),
             transforms.CenterCrop(224),
-        ])
+        ]) # img<int>(W,H,3) -> img<int>(224,224,3)
 
 norm_transform = transforms.Compose([
             resize_transform,
             transforms.ToTensor(),
             transforms.Normalize(mean=vgg_mean, std=vgg_std),
-        ]) # img<int>(W,H,3) -> tens<float>(3,H,W)
+        ]) # img<int>(W,H,3) -> tens<float>(3,224,224)
 
 
 if __name__ == "__main__":
-    alpha = 1.0
-    model_to_load = "decoder_epoch2_N4_lr0.001_wd0.001_lbda0.1_Lc6.5507_Ls4.3967_Ltot6.9903.pt"
+    alpha = 0 # style focus (inference)
+    model_to_load = "decoder_epoch4_N4_lr0.0001_wd0.0001_lbda2_Lc8.3372_Ls2.3552_Ltot13.0476.pt"
 
     model_filepath = os.path.join("AdaIN_Hayden/checkpoints", model_to_load)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -79,5 +79,5 @@ if __name__ == "__main__":
                 gen_img = np.array(gen_img_list[idx]) # arr<int>(H,W,3)
                 ax.imshow(gen_img)
                 ax.axis('off')
-    plt.savefig(grid_file)
+    plt.savefig(grid_file, bbox_inches='tight', pad_inches=0)
     print("Grid image saved")
