@@ -7,11 +7,16 @@ from itertools import product
 import matplotlib.pyplot as plt
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
+resize_transform = transforms.Compose([
+            transforms.Lambda(partial(resize_if_larger, thresh=224)),
+            transforms.CenterCrop(224),
+        ])
+
 norm_transform = transforms.Compose([
+            resize_transform,
             transforms.ToTensor(),
             transforms.Normalize(mean=vgg_mean, std=vgg_std),
         ]) # img<int>(W,H,3) -> tens<float>(3,H,W)
-
 
 
 if __name__ == "__main__":
@@ -31,46 +36,48 @@ if __name__ == "__main__":
     content_dir = "AdaIN_Hayden/inference/content"
     style_dir = "AdaIN_Hayden/inference/style"
     grid_file = "AdaIN_Hayden/inference/generated_grid.png"
-    content_paths = [os.path.join(content_dir, f) for f in os.listdir(content_dir)]
-    style_paths = [os.path.join(style_dir, f) for f in os.listdir(style_dir)]
+    content_paths = [os.path.join(content_dir, f) for f in os.listdir(content_dir)][0:5]
+    style_paths = [os.path.join(style_dir, f) for f in os.listdir(style_dir)][0:5]
     content_img_list = [Image.open(p).convert("RGB") for p in content_paths] # list<img<int>(W,H,3)>
     style_img_list = [Image.open(p).convert("RGB") for p in style_paths] # list<img<int>(W,H,3)>
     content_tens_list = [norm_transform(img) for img in content_img_list] # list<tens<float>(3,H,W)>>
     style_tens_list = [norm_transform(img) for img in style_img_list] # list<tens<float>(3,H,W)>>
-
-    print("Entering image gen loop")
-    gen_img_list = [] # list<img<int>(W,H,3)>
-    for c,s in product(content_tens_list, style_tens_list): # (3,H,W) and (3,H,W)
-        c_4d = c.unsqueeze(0).to(device) # (1,3,H,W)
-        s_4d = s.unsqueeze(0).to(device) # (1,3,H,W)
-        with torch.no_grad():
-            gen_4d, *_ = stn(c_4d,s_4d) # (1,3,H,W)
-        gen = gen_4d.squeeze(0) # (3,H,W)
-        gen_img = norm_tens_to_denorm_img(gen) # img<int>(W,H,3)
-        gen_img_list.append(gen_img)
-    print("Leaving image gen loop")
     
-    fig, axs = plt.subplots(nrows=6, ncols=6, figsize=(12, 12))
+    content_style_pairs = list(product(content_tens_list, style_tens_list)) # list<(tens<float>(3,H,W)>,tens<float>(3,H,W)>)>
+    content_batch = torch.stack([pair[0] for pair in content_style_pairs]).to(device) # (N,3,H,W)
+    style_batch = torch.stack([pair[1] for pair in content_style_pairs]).to(device) # (N,3,H,W)
+    with torch.no_grad():
+        gen_batch, *_ = stn(content_batch,style_batch) # (N,3,H,W)
+    gen_img_list = [] # list<img<int>(W,H,3)>
+    for i in range(0,gen_batch.size(0)): 
+        gen_img = norm_tens_to_denorm_img(gen_batch[i].cpu()) # img<int>(W,H,3)
+        gen_img_list.append(gen_img)
+    
+    fig, axs = plt.subplots(nrows=6, ncols=6, figsize=(12, 12), gridspec_kw={'wspace': 0.01, 'hspace': 0.01})
     for row in range(0,6):
         for col in range(0,6):
             ax = axs[row,col]
             if row==0 and col==0:
                 ax.axis('off')
-            elif row==0: # style images in first row
-                style_img = np.array(style_img_list[col-1]) # arr<int>(H,W,3)
-                ax.imshow(style_img)
-                ax.set_title(f"Style {col}", fontsize=8)
-                ax.axis('off')
-            elif col==0: # content images in first col
-                content_img = np.array(content_img_list[row-1]) # arr<int>(H,W,3)
+            elif row==0: # content images in first row
+                content_img = content_img_list[col-1] # img<int>(W,H,3)
+                content_img = resize_transform(content_img) # img<int>(224,224,3)
+                content_img = np.array(content_img) # arr<int>(224,224,3)
                 ax.imshow(content_img)
-                ax.set_title(f"Content {row}", fontsize=8)
+                # ax.set_title(f"Content {col}", fontsize=8)
+                ax.axis('off')
+            elif col==0: # style images in first col
+                style_img = style_img_list[row-1] # img<int>(W,H,3)
+                style_img = resize_transform(style_img) # img<int>(224,224,3)
+                style_img = np.array(style_img) # arr<int>(224,224,3)
+                ax.imshow(style_img)
+                # ax.set_title(f"Style {row}", fontsize=8)
                 ax.axis('off')
             else: # generated images in inner cells
-                idx = 5*(row-1) + (col-1)
+                # idx = 5*(row-1) + (col-1)
+                idx = 5*(col-1) + (row-1)
                 gen_img = np.array(gen_img_list[idx]) # arr<int>(H,W,3)
                 ax.imshow(gen_img)
-                ax.axis('off')    
-    plt.tight_layout()
+                ax.axis('off')
     plt.savefig(grid_file)
     print("Grid image saved")
