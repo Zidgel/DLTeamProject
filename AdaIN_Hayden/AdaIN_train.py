@@ -278,6 +278,7 @@ if __name__ == "__main__":
     lr = .0001 # learning rate
     wd = .0001 # weight decay
     # lbda = 1 # style weight
+    # test comment
     # for N in [8,16]:
         # for lr in [1e-3,1e-4]:
         #     for wd in [1e-4,1e-3,1e-2]:
