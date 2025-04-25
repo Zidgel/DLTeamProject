@@ -273,11 +273,11 @@ def calc_mean_std_loss(g,s):
 
 
 if __name__ == "__main__":
-    num_epochs = 4
+    num_epochs = 8
     N = 4 # batch size
     lr = .0001 # learning rate
     wd = .0001 # weight decay
-    # lbda = 1 # style weight
+    lbda = 10 # style weight
     # test comment2
     # for N in [8,16]:
         # for lr in [1e-3,1e-4]:
@@ -285,46 +285,79 @@ if __name__ == "__main__":
         #         for lbda in [.1,1,10]:
         #             # if lr==.001 and wd==.0001 and lbda==.1: continue
         #             if not(N==16 and lr==.001 and wd==.0001 and lbda==10): continue
-    for lbda in [3,4,5,6,7,8,9,10]:
+    # for lbda in [25,30,35,40,50,70,100]:
 
-        num_workers = 4
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    num_workers = 4
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-        train_dataset = RandomPairDataset("AdaIN_Hayden/data/content/train", "AdaIN_Hayden/data/style/train")
-        val_dataset = RandomPairDataset("AdaIN_Hayden/data/content/val", "AdaIN_Hayden/data/style/val")
-        test_dataset = RandomPairDataset("AdaIN_Hayden/data/content/test", "AdaIN_Hayden/data/style/test")
+    train_dataset = RandomPairDataset("AdaIN_Hayden/data/content/train", "AdaIN_Hayden/data/style/train")
+    val_dataset = RandomPairDataset("AdaIN_Hayden/data/content/val", "AdaIN_Hayden/data/style/val")
+    test_dataset = RandomPairDataset("AdaIN_Hayden/data/content/test", "AdaIN_Hayden/data/style/test")
 
-        # for debugging / course tuning
-        train_dataset = Subset(train_dataset, list(range(len(train_dataset)//10)))
-        val_dataset = Subset(val_dataset, list(range(len(val_dataset)//10)))
-        test_dataset = Subset(test_dataset, list(range(len(test_dataset)//10)))
+    # for debugging / course tuning
+    # train_dataset = Subset(train_dataset, list(range(len(train_dataset)//10)))
+    # val_dataset = Subset(val_dataset, list(range(len(val_dataset)//10)))
+    # test_dataset = Subset(test_dataset, list(range(len(test_dataset)//10)))
 
-        train_loader = DataLoader(train_dataset, batch_size=N, shuffle=True, num_workers=num_workers)
-        val_loader = DataLoader(val_dataset, batch_size=N, shuffle=False, num_workers=num_workers)
-        test_loader = DataLoader(test_dataset, batch_size=N, shuffle=False, num_workers=num_workers)
+    train_loader = DataLoader(train_dataset, batch_size=N, shuffle=True, num_workers=num_workers)
+    val_loader = DataLoader(val_dataset, batch_size=N, shuffle=False, num_workers=num_workers)
+    test_loader = DataLoader(test_dataset, batch_size=N, shuffle=False, num_workers=num_workers)
 
-        enc = Encoder().to(device)
-        adain = AdaIN().to(device)
-        dec = Decoder().to(device)
-        stn = StyleTransferNet(enc,adain,dec).to(device)
-        opt = optim.AdamW(dec.parameters(), lr=lr, weight_decay=wd)
+    enc = Encoder().to(device)
+    adain = AdaIN().to(device)
+    dec = Decoder().to(device)
+    stn = StyleTransferNet(enc,adain,dec).to(device)
+    opt = optim.AdamW(dec.parameters(), lr=lr, weight_decay=wd)
 
-        num_exs_train = len(train_dataset)
-        num_batches_train = math.ceil(num_exs_train/N)
-        num_exs_val = len(val_dataset)
-        num_batches_val = math.ceil(num_exs_val/N)
-        num_exs_test = len(test_dataset)
-        num_batches_test = math.ceil(num_exs_test/N)
+    num_exs_train = len(train_dataset)
+    num_batches_train = math.ceil(num_exs_train/N)
+    num_exs_val = len(val_dataset)
+    num_batches_val = math.ceil(num_exs_val/N)
+    num_exs_test = len(test_dataset)
+    num_batches_test = math.ceil(num_exs_test/N)
 
-        best_val_loss = float("inf")
-        print("Entering epochs loop")
-        for epoch in range(1,num_epochs+1):
-            stn.train()
-            cumul_loss_c = 0
-            cumul_loss_s = 0
-            cumul_loss_tot = 0
-            start_time = time.time()
-            for batch_id,(c_img,s_img) in enumerate(train_loader,1): # (N,3,224,224) and (N,3,224,224)
+    best_val_loss = float("inf")
+    print("Entering epochs loop")
+    for epoch in range(1,num_epochs+1):
+        stn.train()
+        cumul_loss_c = 0
+        cumul_loss_s = 0
+        cumul_loss_tot = 0
+        start_time = time.time()
+        for batch_id,(c_img,s_img) in enumerate(train_loader,1): # (N,3,224,224) and (N,3,224,224)
+            c_img = c_img.to(device)
+            s_img = s_img.to(device)
+            gen_img,t,s_11,s_21,s_31,s_41 = stn(c_img,s_img) # (N,3,224,224) (N,512,28,28) (N,64,224,224) (N,128,112,112) (N,256,56,56) (N,512,28,28)
+
+            g_11,g_21,g_31,g_41 = enc(gen_img) # (N,64,224,224) (N,128,112,112) (N,256,56,56) (N,512,28,28)
+            loss_c = F.mse_loss(g_41, t)
+            loss_s = 0
+            for g_feat,s_feat in zip([g_11,g_21,g_31,g_41], [s_11,s_21,s_31,s_41]): # relu1_1, relu2_1, relu3_1, relu4_1
+                loss_s += calc_mean_std_loss(g_feat,s_feat)
+            loss_tot = loss_c + lbda*loss_s
+
+            opt.zero_grad()
+            loss_tot.backward()
+            opt.step()
+
+            cumul_loss_c += loss_c.item()
+            cumul_loss_s += loss_s.item()
+            cumul_loss_tot += loss_tot.item()
+
+            if batch_id%1000==0:
+                print(f"TRAIN: Epoch {epoch}/{num_epochs}, Batch {batch_id}/{num_batches_train}, Time {time.time()-start_time}, "
+                    f"Avg L_c: {cumul_loss_c/batch_id:.4f}, Avg L_s: {cumul_loss_s/batch_id:.4f}, Avg L_tot: {cumul_loss_tot/batch_id:.4f}")
+            # if batch_id==1000: break # NOTE: debugging only
+        print(f"\nTRAIN: End of Epoch {epoch}/{num_epochs}, Avg L_c: {cumul_loss_c/batch_id:.4f}, Avg L_s: {cumul_loss_s/batch_id:.4f}, Avg L_tot: {cumul_loss_tot/batch_id:.4f}\n")
+
+
+        stn.eval()
+        cumul_loss_c = 0
+        cumul_loss_s = 0
+        cumul_loss_tot = 0
+        start_time = time.time()
+        with torch.no_grad():
+            for batch_id,(c_img,s_img) in enumerate(val_loader,1): # (N,3,224,224) and (N,3,224,224)
                 c_img = c_img.to(device)
                 s_img = s_img.to(device)
                 gen_img,t,s_11,s_21,s_31,s_41 = stn(c_img,s_img) # (N,3,224,224) (N,512,28,28) (N,64,224,224) (N,128,112,112) (N,256,56,56) (N,512,28,28)
@@ -336,56 +369,23 @@ if __name__ == "__main__":
                     loss_s += calc_mean_std_loss(g_feat,s_feat)
                 loss_tot = loss_c + lbda*loss_s
 
-                opt.zero_grad()
-                loss_tot.backward()
-                opt.step()
-
                 cumul_loss_c += loss_c.item()
                 cumul_loss_s += loss_s.item()
                 cumul_loss_tot += loss_tot.item()
 
                 if batch_id%100==0:
-                    print(f"TRAIN: Epoch {epoch}/{num_epochs}, Batch {batch_id}/{num_batches_train}, Time {time.time()-start_time}, "
+                    print(f"VAL: Epoch {epoch}/{num_epochs}, Batch {batch_id}/{num_batches_val}, Time {time.time()-start_time}, "
                         f"Avg L_c: {cumul_loss_c/batch_id:.4f}, Avg L_s: {cumul_loss_s/batch_id:.4f}, Avg L_tot: {cumul_loss_tot/batch_id:.4f}")
-                # if batch_id==1000: break # NOTE: debugging only
-            print(f"\nTRAIN: End of Epoch {epoch}/{num_epochs}, Avg L_c: {cumul_loss_c/batch_id:.4f}, Avg L_s: {cumul_loss_s/batch_id:.4f}, Avg L_tot: {cumul_loss_tot/batch_id:.4f}\n")
-
-
-            stn.eval()
-            cumul_loss_c = 0
-            cumul_loss_s = 0
-            cumul_loss_tot = 0
-            start_time = time.time()
-            with torch.no_grad():
-                for batch_id,(c_img,s_img) in enumerate(val_loader,1): # (N,3,224,224) and (N,3,224,224)
-                    c_img = c_img.to(device)
-                    s_img = s_img.to(device)
-                    gen_img,t,s_11,s_21,s_31,s_41 = stn(c_img,s_img) # (N,3,224,224) (N,512,28,28) (N,64,224,224) (N,128,112,112) (N,256,56,56) (N,512,28,28)
-
-                    g_11,g_21,g_31,g_41 = enc(gen_img) # (N,64,224,224) (N,128,112,112) (N,256,56,56) (N,512,28,28)
-                    loss_c = F.mse_loss(g_41, t)
-                    loss_s = 0
-                    for g_feat,s_feat in zip([g_11,g_21,g_31,g_41], [s_11,s_21,s_31,s_41]): # relu1_1, relu2_1, relu3_1, relu4_1
-                        loss_s += calc_mean_std_loss(g_feat,s_feat)
-                    loss_tot = loss_c + lbda*loss_s
-
-                    cumul_loss_c += loss_c.item()
-                    cumul_loss_s += loss_s.item()
-                    cumul_loss_tot += loss_tot.item()
-
-                    if batch_id%100==0:
-                        print(f"VAL: Epoch {epoch}/{num_epochs}, Batch {batch_id}/{num_batches_val}, Time {time.time()-start_time}, "
-                            f"Avg L_c: {cumul_loss_c/batch_id:.4f}, Avg L_s: {cumul_loss_s/batch_id:.4f}, Avg L_tot: {cumul_loss_tot/batch_id:.4f}")
-            print(f"\nVAL: End of Epoch {epoch}/{num_epochs}, Avg L_c: {cumul_loss_c/batch_id:.4f}, Avg L_s: {cumul_loss_s/batch_id:.4f}, Avg L_tot: {cumul_loss_tot/batch_id:.4f}\n")
-            avg_Lc = cumul_loss_c/batch_id
-            avg_Ls = cumul_loss_s/batch_id
-            avg_Ltot = cumul_loss_tot/batch_id
-            if avg_Ltot < best_val_loss:
-                best_val_loss = avg_Ltot
-                model_filename = f"decoder_epoch{epoch}_N{N}_lr{lr}_wd{wd}_lbda{lbda}_Lc{avg_Lc:.4f}_Ls{avg_Ls:.4f}_Ltot{avg_Ltot:.4f}.pt"
-                save_path = os.path.join("AdaIN_Hayden/checkpoints", model_filename)
-                torch.save(dec.state_dict(), save_path)
-                print(f"Saved new best model to {save_path}")
+        print(f"\nVAL: End of Epoch {epoch}/{num_epochs}, Avg L_c: {cumul_loss_c/batch_id:.4f}, Avg L_s: {cumul_loss_s/batch_id:.4f}, Avg L_tot: {cumul_loss_tot/batch_id:.4f}\n")
+        avg_Lc = cumul_loss_c/batch_id
+        avg_Ls = cumul_loss_s/batch_id
+        avg_Ltot = cumul_loss_tot/batch_id
+        if avg_Ltot < best_val_loss:
+            best_val_loss = avg_Ltot
+            model_filename = f"decoder_epoch{epoch}_N{N}_lr{lr}_wd{wd}_lbda{lbda}_Lc{avg_Lc:.4f}_Ls{avg_Ls:.4f}_Ltot{avg_Ltot:.4f}.pt"
+            save_path = os.path.join("AdaIN_Hayden/checkpoints", model_filename)
+            torch.save(dec.state_dict(), save_path)
+            print(f"Saved new best model to {save_path}")
 
 
     # stn.eval()

@@ -7,10 +7,15 @@ from itertools import product
 import matplotlib.pyplot as plt
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
+# resize_transform = transforms.Compose([
+#             transforms.Lambda(partial(resize_if_larger, thresh=224)),
+#             transforms.CenterCrop(224),
+#         ]) # img<int>(W,H,3) -> img<int>(224,224,3)
+
 resize_transform = transforms.Compose([
-            transforms.Lambda(partial(resize_if_larger, thresh=224)),
-            transforms.CenterCrop(224),
-        ]) # img<int>(W,H,3) -> img<int>(224,224,3)
+            transforms.Lambda(partial(resize_if_larger, thresh=448)),
+            transforms.CenterCrop(448),
+        ]) # img<int>(W,H,3) -> img<int>(448,448,3)
 
 norm_transform = transforms.Compose([
             resize_transform,
@@ -20,8 +25,8 @@ norm_transform = transforms.Compose([
 
 
 if __name__ == "__main__":
-    alpha = 0 # style focus (inference)
-    model_to_load = "decoder_epoch4_N4_lr0.0001_wd0.0001_lbda2_Lc8.3372_Ls2.3552_Ltot13.0476.pt"
+    alpha = 1 # style focus (inference)
+    model_to_load = "decoder_epoch8_N4_lr0.0001_wd0.0001_lbda10_Lc9.0121_Ls1.1444_Ltot20.4565.pt"
 
     model_filepath = os.path.join("AdaIN_Hayden/checkpoints", model_to_load)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
