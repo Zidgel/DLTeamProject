@@ -73,7 +73,7 @@ class fst_api:
         )
         self.tr.train()
 
-    def style_transfer(self, content_image: Image):
+    def style_transfer(self, content_image: Image, path=""):
         content_tensor = (
             self.content_transformation(content_image).unsqueeze(0).to(self.device)
         )
@@ -81,4 +81,4 @@ class fst_api:
             output = self.tr.model.net.forward(content_tensor)
             output = (output.clamp(-1, 1) + 1) / 2
             stylized_image = TF.to_pil_image(output.squeeze(0).cpu())
-            stylized_image.show()
+            stylized_image.save(path)
