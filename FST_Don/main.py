@@ -7,7 +7,7 @@ if __name__ == "__main__":
         sp = "fig1/style/s" + str(i) + ".jpg"
         style = Image.open(sp).convert("RGB")
         # style = style.resize((600, 600))
-        dataset = "content_images/imagenette2-320"
+        dataset = "../../imagenette2-320"
         api = fst_api(style, dataset, 4, 1e-3, 1e5)
         api.train_model()
         cp = "fig1/content/c" + str(i) + ".jpg"
@@ -26,7 +26,7 @@ if __name__ == "__main__":
         print("s: ", s_pre + s)
         style = Image.open(s_pre + s).convert("RGB")
         # style = style.resize((1000, 1000))
-        dataset = "content_images/imagenette2-320"
+        dataset = "../../imagenette2-320"
         api = fst_api(style, dataset, 4, 1e-3, 1e5)
         api.train_model()
         for c in content:
@@ -35,9 +35,6 @@ if __name__ == "__main__":
             path = "fig2/gen/" + s[0:2] + c[0:2] + ".jpg"
             print("g", path)
             api.style_transfer(content_image, path)
-        
+
         del api
         torch.cuda.empty_cache()
-
-
-

@@ -43,8 +43,9 @@ class fst_api:
             [
                 transforms.Resize(size=(height, width)),
                 transforms.ToTensor(),  # Convert to tensor
-                transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                         std=[0.229, 0.224, 0.225])
+                transforms.Normalize(
+                    mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
+                ),
             ]
         )
         return style_transform
@@ -57,18 +58,20 @@ class fst_api:
             [
                 transforms.Resize(size=(256, 256)),
                 transforms.ToTensor(),  # Convert to tensor
-                transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                         std=[0.229, 0.224, 0.225])
+                transforms.Normalize(
+                    mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
+                ),
             ]
         )
         return content_transform
-    
+
     def _get_inference_transform(self):
         inf_transform = transforms.Compose(
             [
                 transforms.ToTensor(),  # Convert to tensor
-                transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                         std=[0.229, 0.224, 0.225])
+                transforms.Normalize(
+                    mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
+                ),
             ]
         )
         return inf_transform
@@ -94,10 +97,12 @@ class fst_api:
         with torch.no_grad():
             output = self.tr.model.net.forward(content_tensor)
             unnormalize = transforms.Normalize(
-                mean=[-0.485/0.229, -0.456/0.224, -0.406/0.225],
-                std=[1/0.229, 1/0.224, 1/0.225]
+                mean=[-0.485 / 0.229, -0.456 / 0.224, -0.406 / 0.225],
+                std=[1 / 0.229, 1 / 0.224, 1 / 0.225],
             )
             output = unnormalize(output)
-            output = torch.clamp(output, 0 ,1)
+            min_val = output.min()
+            max_val = output.max()
+            output = (output - min_val) / (max_val - min_val + 1e-5)
             stylized_image = TF.to_pil_image(output.squeeze(0).cpu())
             stylized_image.save(path)

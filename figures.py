@@ -1,0 +1,108 @@
+import matplotlib.pyplot as plt
+from PIL import Image
+
+
+def plot_image_grid(images, rows, cols, path, col_titles=None, figsize=(16, 12)):
+    fig, axes = plt.subplots(rows, cols, figsize=figsize)
+    i = 0
+    for col in range(cols):
+        for row in range(rows):
+            ax = axes[row, col]
+
+            if i < len(images):
+                ax.imshow(images[i])
+            ax.axis("off")
+            i += 1
+
+    if col_titles is not None:
+        for col in range(cols):
+            axes[0, col].set_title(col_titles[col], fontsize=14, pad=15)
+
+    plt.tight_layout()
+    plt.subplots_adjust(wspace=0.05, hspace=0.05)
+    plt.savefig(path)
+
+
+if __name__ == "__main__":
+    paths = [
+        "FST_Don/fig1/content/c1.jpg",
+        "FST_Don/fig1/content/c2.jpg",
+        "FST_Don/fig1/content/c3.jpg",
+        "FST_Don/fig1/content/c4.jpg",
+        "FST_Don/fig1/content/c5.jpg",
+        "FST_Don/fig1/style/s1.jpg",
+        "FST_Don/fig1/style/s2.jpg",
+        "FST_Don/fig1/style/s3.jpg",
+        "FST_Don/fig1/style/s4.jpg",
+        "FST_Don/fig1/style/s5.jpg",
+        "data/fig1_generated/AdaIN/g1a.png",
+        "data/fig1_generated/AdaIN/g2a.png",
+        "data/fig1_generated/AdaIN/g3a.png",
+        "data/fig1_generated/AdaIN/g4a.png",
+        "data/fig1_generated/AdaIN/g5a.png",
+        "data/fig1_generated/FST/g1f.jpg",
+        "data/fig1_generated/FST/g2f.jpg",
+        "data/fig1_generated/FST/g3f.jpg",
+        "data/fig1_generated/FST/g4f.jpg",
+        "data/fig1_generated/FST/g5f.jpg",
+        "data/fig1_generated/NST/g1n.png",
+        "data/fig1_generated/NST/g2n.png",
+        "data/fig1_generated/NST/g3n.png",
+        "data/fig1_generated/NST/g4n.png",
+        "data/fig1_generated/NST/g5n.png",
+        "data/fig1_generated/StyleShot/g1s.jpg",
+        "data/fig1_generated/StyleShot/g2s.jpg",
+        "data/fig1_generated/StyleShot/g3s.jpg",
+        "data/fig1_generated/StyleShot/g4s.jpg",
+        "data/fig1_generated/StyleShot/g5s.jpg",
+    ]
+
+    plot_image_grid(
+        [Image.open(img) for img in paths],
+        5,
+        6,
+        "data/fig1_generated/figure",
+        col_titles=["Content", "Style", "AdaIN", "FST", "NST", "StyleShot"],
+    )
+
+    # Content 1
+    paths = [
+        "FST_Don/fig2/content/c1.jpg",
+        "FST_Don/fig2/content/c1.jpg",
+        "FST_Don/fig2/content/c1.jpg",
+        "FST_Don/fig2/content/c1.jpg",
+        "FST_Don/fig2/content/c1.jpg",
+        "FST_Don/fig2/style/s1.jpg",
+        "FST_Don/fig2/style/s2.jpg",
+        "FST_Don/fig2/style/s3.jpg",
+        "FST_Don/fig2/style/s4.jpg",
+        "FST_Don/fig2/style/s5.jpg",
+        "data/fig2_generated/AdaIN/g1a.png",
+        "data/fig2_generated/AdaIN/g2a.png",
+        "data/fig2_generated/AdaIN/g3a.png",
+        "data/fig2_generated/AdaIN/g4a.png",
+        "data/fig2_generated/AdaIN/g5a.png",
+        "data/fig2_generated/FST/s1c1.jpg",
+        "data/fig2_generated/FST/s2c1.jpg",
+        "data/fig2_generated/FST/s3c1.jpg",
+        "data/fig2_generated/FST/s4c1.jpg",
+        "data/fig2_generated/FST/s5c1.jpg",
+        "data/fig2_generated/NST/s1.jpg_c.jpg.png",
+        "data/fig2_generated/NST/s2.jpg_c.jpg.png",
+        "data/fig2_generated/NST/s3.jpg_c.jpg.png",
+        "data/fig2_generated/NST/s4.jpg_c.jpg.png",
+        "data/fig2_generated/NST/s5.jpg_c.jpg.png",
+        "data/fig2_generated/StyleShot/s1.jpg_c1.jpg",
+        "data/fig2_generated/StyleShot/s2.jpg_c1.jpg",
+        "data/fig2_generated/StyleShot/s3.jpg_c1.jpg",
+        "data/fig2_generated/StyleShot/s4.jpg_c1.jpg",
+        "data/fig2_generated/StyleShot/s5.jpg_c1.jpg",
+    ]
+
+    plot_image_grid(
+        [Image.open(img) for img in paths],
+        5,
+        6,
+        "data/fig2_generated/figure1",
+        col_titles=["Content", "Style", "AdaIN", "FST", "NST", "StyleShot"],
+    )
