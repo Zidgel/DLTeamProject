@@ -18,6 +18,7 @@ class fst_api:
     def __init__(self, style_image: Image, dataset_path: str, epochs, lr, style_beta):
         self.style_transformation = self._get_style_transform(style_image)
         self.content_transformation = self._get_content_transform(style_image)
+        self.inference_transform = self._get_inference_transform()
         self.dataloader = self._init_dataloader(dataset_path)
         self.style_image = style_image
         self.epochs = epochs
@@ -42,7 +43,8 @@ class fst_api:
             [
                 transforms.Resize(size=(height, width)),
                 transforms.ToTensor(),  # Convert to tensor
-                transforms.Normalize([0.5] * 3, [0.5] * 3),  # Normalize to [-1, 1]
+                transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                         std=[0.229, 0.224, 0.225])
             ]
         )
         return style_transform
@@ -53,15 +55,27 @@ class fst_api:
         height = (int)(height / 4) * 4
         content_transform = transforms.Compose(
             [
+                transforms.Resize(size=(256, 256)),
                 transforms.ToTensor(),  # Convert to tensor
-                transforms.Normalize([0.5] * 3, [0.5] * 3),  # Normalize to [-1, 1]
+                transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                         std=[0.229, 0.224, 0.225])
             ]
         )
         return content_transform
+    
+    def _get_inference_transform(self):
+        inf_transform = transforms.Compose(
+            [
+                transforms.ToTensor(),  # Convert to tensor
+                transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                         std=[0.229, 0.224, 0.225])
+            ]
+        )
+        return inf_transform
 
     def _init_dataloader(self, path: str):
         # Load dataset using ImageFolder
-        dataset = datasets.ImageFolder(root=path, transform=self.style_transformation)
+        dataset = datasets.ImageFolder(root=path, transform=self.content_transformation)
 
         # Create DataLoader
         return DataLoader(dataset, batch_size=16, shuffle=True, num_workers=4)
@@ -75,10 +89,15 @@ class fst_api:
 
     def style_transfer(self, content_image: Image, path=""):
         content_tensor = (
-            self.content_transformation(content_image).unsqueeze(0).to(self.device)
+            self.inference_transform(content_image).unsqueeze(0).to(self.device)
         )
         with torch.no_grad():
             output = self.tr.model.net.forward(content_tensor)
-            output = (output.clamp(-1, 1) + 1) / 2
+            unnormalize = transforms.Normalize(
+                mean=[-0.485/0.229, -0.456/0.224, -0.406/0.225],
+                std=[1/0.229, 1/0.224, 1/0.225]
+            )
+            output = unnormalize(output)
+            output = torch.clamp(output, 0 ,1)
             stylized_image = TF.to_pil_image(output.squeeze(0).cpu())
             stylized_image.save(path)
