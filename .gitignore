@@ -5,3 +5,8 @@ StyleData/
 ContentData/
 StyleShot_all/checkpoints/
 StyleShot_all/debug/
+AdaIN_Hayden/data/
+AdaIN_Hayden/inference/
+AdaIN_Hayden/checkpoints/
+AdaIN_Hayden/adain_hparam_tuning.pptx
+AdaIN_Hayden/example_figs.pptx
