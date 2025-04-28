@@ -2,8 +2,11 @@
 Team Project for Deep Learning 7643
 
 Team: Comic Sans
+
 Benjamin Kozel
+
 Don Pham
+
 Hayden Schennum
 
 Re-implementation of the following style transfer techniques:
