@@ -1,5 +1,5 @@
 # DLTeamProject
-Team Project for Deep Learning 7643
+Team Project for Deep Learning - Georgia Tech CS7643
 
 Team: Comic Sans (Benjamin Kozel, Don Pham, Hayden Schennum)
 
