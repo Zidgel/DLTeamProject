@@ -9,46 +9,92 @@ from PIL import Image
 import matplotlib.pyplot as plt
 import os
 
+#Standardizing the content and style image based off a gaussian distribution
+global_mean = torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1)
+global_std = torch.tensor([0.229, 0.224, 0.225]).view(3, 1, 1)
 
-def denormalize_image(tensor):
+def get_features_per_layer(image, model):
+    #This function extracts the features of the iamge per layer of the VGG19 model
+    layers = {
+        '0': 'conv1_1', 
+        '5': 'conv2_1', 
+        '10': 'conv3_1',
+        '19': 'conv4_1', 
+        '21': 'content'
+    }
+    features = {}
+    x = image
+    for name, layer in model._modules.items():
+        x = layer(x)
+        if name in layers:
+            features[layers[name]] = x
+    return features
 
-    mean = torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1)
-    std = torch.tensor([0.229, 0.224, 0.225]).view(3, 1, 1)
-    tensor = tensor.cpu().clone() * std + mean  
-    return tensor.clamp(0, 1)
 
-def show_image(tensor_image, title="Styled Image"):
+def gram_matrix(tensor):
+    #finds the gram matrix at a given layer which is the dot product of the feature map
+    _, d, h, w = tensor.size()
+    tensor = tensor.view(d, h * w)
+    return torch.mm(tensor, tensor.t()) / (d * h * w)
+
+def style_loss(target_features, style_features):
+    #calculates the style loss by extracting the gram matrix of the style and target features at each given layer and find the mse 
+    #between the two
+    loss = 0
+    for layer in style_features:
+        target_gram = gram_matrix(target_features[layer])
+        style_gram = gram_matrix(style_features[layer])
+        loss += F.mse_loss(target_gram, style_gram)
+    return loss
+
+
+def run_model(vgg, content_image, style_image, name):
+
+    content_features = get_features_per_layer(content_image, vgg)
+    style_features = get_features_per_layer(style_image, vgg)
+
+
+    target = content_image.clone().requires_grad_(True).to(device)
+
+    # ------HYPERPARAMETERS------
+    epochs = 1000 #High number of epochs
+    learning_rate = 0.1 #Higher learning rate to increase speed of convergence
+    style_weight = 1e10  #Heavily weighting the style loss
+    content_weight = 1  #Low content loss weighting since we are initializing from the content image
     
-    image = tensor_image.cpu().clone().detach()  
-    image = image.squeeze(0)  
-    image = transforms.ToPILImage()(image)
+    #Learning rate scheduler
+    step_size = 250
+    gamma = 0.6
 
-    plt.imshow(image)
-    plt.title(title)
-    plt.axis("off")  
-    plt.show()
+    #Using ADAM as the standard optimizer
+    optimizer = optim.Adam([target], lr=learning_rate)
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=step_size, gamma=gamma)
 
+    for _ in range(epochs):
+        optimizer.zero_grad()
+        
+        target_features = get_features_per_layer(target, vgg)
+        s_loss = style_loss(target_features, style_features)
+        c_loss = F.mse_loss(target_features['content'], content_features['content'])
+        
+        #Calculate total loss
+        total_loss = style_weight * s_loss + content_weight * c_loss
+        total_loss.backward()
+        optimizer.step()
+        scheduler.step()
 
-#load images and convert them to the same colorset
-def load_image(image_path, to_grayscale=False):
-    # standardize input images. 
-    transform = transforms.Compose([
-    transforms.Resize((680, 680)),
-    transforms.ToTensor(),
-    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]), #TODO play around with normalizaiton factor?
-    ])
-    """Loads an image and optionally converts it to grayscale."""
-    image = Image.open(image_path)
-    if to_grayscale:
-        image = image.convert("L").convert("RGB")
-    else:
-        image = image.convert("RGB")
-    image = transform(image).unsqueeze(0)
-    return image.to(device)
+    # Denormalizing the image for saving
+    generated_image = (target.cpu().clone() * global_std + global_mean).clamp(0, 1)
+    
+    #Final transformation into a PIL image
+    generated_pil = transforms.ToPILImage()(generated_image)
+    
+    generated_pil.save(f"../output/{name}.png")
+    print("Styled image saved as stylized_output.png")
 
-#output_panels/panel_0.png
+if __name__ == "__main__":
+    device = torch.device("cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu")
 
-def init_model():
     # Using the VGG19 model weights for feature extraction and transfer
     vgg = models.vgg19(weights=VGG19_Weights.DEFAULT).features.to(device).eval()
     for param in vgg.parameters():
@@ -60,101 +106,20 @@ def init_model():
         if isinstance(layer, torch.nn.MaxPool2d):
             vgg[i] = torch.nn.AvgPool2d(kernel_size=layer.kernel_size, stride=layer.stride, padding=layer.padding)
 
-    return vgg
-
-def extract_features(image, model, layers=None):
-    """Extracts features from specified layers of the model."""
-    if layers is None:
-        layers = {
-            '0': 'conv1_1', '5': 'conv2_1', '10': 'conv3_1',
-            '19': 'conv4_1', '21': 'content'
-        }
-    features = {}
-    x = image
-    for name, layer in model._modules.items():
-        x = layer(x)
-        if name in layers:
-            features[layers[name]] = x
-    return features
-
-
-def gram_matrix(tensor):
-    """Computes the Gram matrix for style loss."""
-    _, d, h, w = tensor.size()
-    tensor = tensor.view(d, h * w)
-    return torch.mm(tensor, tensor.t()) / (d * h * w)
-
-def style_loss(target_features, style_features):
-    """Computes style loss."""
-    loss = 0
-    for layer in style_features:
-        target_gram = gram_matrix(target_features[layer])
-        style_gram = gram_matrix(style_features[layer])
-        loss += F.mse_loss(target_gram, style_gram)
-    return loss
-
-def content_loss(target_features, content_features):
-    """Computes content loss."""
-    return F.mse_loss(target_features['content'], content_features['content'])
-
-
-def run_model(vgg, content_image, style_image, name):
-
-    content_features = extract_features(content_image, vgg)
-    style_features = extract_features(style_image, vgg)
-
-
-    target = content_image.clone().requires_grad_(True).to(device)
-
-
-    epochs = 1000
-    learning_rate = 0.1
-    style_weight = 1e10  #Weighting for style loss
-    content_weight = 1  
-    step_size = 250
-    gamma = 0.6
-
-    optimizer = optim.Adam([target], lr=learning_rate)
-    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=step_size, gamma=gamma)
-
-    for epoch in range(epochs):
-        optimizer.zero_grad()
-        
-        target_features = extract_features(target, vgg)
-        s_loss = style_loss(target_features, style_features)
-        c_loss = content_loss(target_features, content_features)
-        
-
-        total_loss = style_weight * s_loss + content_weight * c_loss
-        total_loss.backward()
-        optimizer.step()
-        scheduler.step()
-
-        if epoch % 100 == 0:
-            print(f"Epoch {epoch}, Style Loss: {s_loss.item():.6f}, Content Loss: {c_loss.item():.6f}, Total Loss: {total_loss.item():.6f}")
-
-
-
-
-    styled_image = denormalize_image(target.cpu().squeeze(0)) 
-    # show_image(styled_image)
-
-    styled_pil = transforms.ToPILImage()(styled_image)
-    
-    styled_pil.save(f"../output/{name}.png")
-    print("Styled image saved as stylized_output.png")
-
-if __name__ == "__main__":
-    device = torch.device("cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu")
-    print(f"Using device: {device}")
-    vgg = init_model()
     style_dir = "../style"
     content_dir = "../content"
+
+    transform = transforms.Compose([
+    transforms.ToTensor(),
+    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]), 
+    ])
+
+
     if not os.path.exists("../output"):
         os.makedirs("../output")
     for style in os.listdir(style_dir):
         for content in os.listdir(content_dir):
             print(f"Processing {style} with {content}")
-            content_image = load_image(f"{content_dir}/{content}", to_grayscale=False)
-            style_image = load_image(f"{style_dir}/{style}")
+            content_image = transform(Image.open(f"{content_dir}/{content}")).unsqueeze(0).to(device)
+            style_image = transform(Image.open(f"{style_dir}/{style}")).unsqueeze(0).to(device) 
             run_model(vgg, content_image, style_image, name = f"{style}_{content}")
